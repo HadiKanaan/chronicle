@@ -1,0 +1,10 @@
+{
+  "human_first": ["Aldric", "Serath", "Maren", "Voss", "Lirien", "Davan", "Orra", "Ceth", "Fyra", "Brun", "Isolde", "Kael", "Thessa", "Orvyn", "Nira"],
+  "human_last": ["Vane", "Ashford", "Morren", "Crale", "Dusk", "Wynn", "Holst", "Farren", "Blaine", "Thorn"],
+  "occupations_tier1": ["blacksmith", "magistrate", "tavern_keeper", "merchant", "priest", "guard_captain", "herbalist"],
+  "occupations_tier2": ["guard", "farmer", "trader", "carpenter", "beggar", "courier", "fisherman"],
+  "occupations_tier3": ["laborer", "peasant", "child", "elder", "wanderer"],
+  "personality_traits": ["pragmatic", "curious", "suspicious", "generous", "greedy", "loyal", "cowardly", "brave", "resentful", "cheerful", "melancholic", "ambitious", "cautious", "reckless"],
+  "dark_traits": ["willing to betray allies for profit", "hoards information as leverage", "cruel to those weaker than them", "secretly collaborates with criminal elements"],
+  "redeeming_qualities": ["fiercely protective of family", "genuinely kind to strangers in need", "keeps every promise once made", "donates anonymously to the poor"]
+}

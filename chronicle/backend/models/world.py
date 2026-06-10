@@ -1,0 +1,70 @@
+from __future__ import annotations
+
+from enum import Enum
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class TileType(str, Enum):
+    GRASS = "grass"
+    DIRT = "dirt"
+    STONE_PATH = "stone_path"
+    WATER = "water"
+    BUILDING_FLOOR = "building_floor"
+    BUILDING_WALL = "building_wall"
+
+
+class Tile(BaseModel):
+    x: int
+    y: int
+    tile_type: TileType
+    passable: bool
+    building_id: Optional[str] = None
+    resource: Optional[str] = None
+
+
+class Building(BaseModel):
+    id: str
+    name: str
+    building_type: str
+    x: int
+    y: int
+    width: int
+    height: int
+    owner_npc_id: Optional[str] = None
+
+
+class Region(BaseModel):
+    id: str
+    name: str
+    width: int
+    height: int
+    biome: str
+    tiles: list[list[Tile]]
+    buildings: list[Building]
+    current_weather: str = "clear"
+    season: str = "spring"
+
+
+class WorldState(BaseModel):
+    region: Region
+    current_day: int = 1
+    current_hour: int = 6
+    demon_lord_npc_id: Optional[str] = None
+    player_npc_id: Optional[str] = None
+    game_started: bool = False
+
+
+class RenderPayload(BaseModel):
+    tiles: list[dict] = Field(default_factory=list)
+    npcs: list[dict] = Field(default_factory=list)
+    player: Optional[dict] = None
+    time_of_day: str
+    weather: str
+    dialogue: Optional[dict] = None
+    notifications: list[str] = Field(default_factory=list)
+    faction_reputations: dict[str, int] = Field(default_factory=dict)
+    current_day: int = 1
+    current_hour: int = 6
+    fog_map: list[dict] = Field(default_factory=list)
