@@ -1,8 +1,10 @@
 """NPC behavior system (Day 4 / User Story 2).
 
 Each hourly tick re-classifies every simulated NPC's behavior state with the
-ML behavior classifier and walks the NPC a few tiles toward the place that
-behavior implies (home, workplace, tavern, market). Each daily tick (dawn)
+ML behavior classifier and caches a BFS path toward the place that behavior
+implies (home, workplace, tavern, market). A faster movement sub-tick then
+pops one path step per real second so NPCs visibly walk at the frontend's
+polling cadence instead of teleporting once per hour. Each daily tick (dawn)
 rolls every NPC's mood forward with the mood model, appends significant events
 to rolling memory buffers, and records dramatic moments as persisted rumors
 (structure only — propagation arrives on Day 6).
@@ -23,9 +25,11 @@ from ml import train as ml
 # Rolling memory: keep only the most recent significant events per NPC.
 MEMORY_BUFFER_CAP = 10
 
-# Tiles walked per in-game hour. Fleeing NPCs hurry.
-WALK_SPEED = 5
-FLEE_SPEED = 9
+# Tiles walked per movement sub-tick. The clock pops cached path steps once per
+# real second; at 5 real seconds per game hour that is 5 tiles/hour walking and
+# 10 tiles/hour fleeing.
+WALK_TILES_PER_STEP = 1
+FLEE_TILES_PER_STEP = 2
 
 # How NPCs read each mood when deciding what to do and how they feel.
 MOOD_VALENCE = {
@@ -155,23 +159,24 @@ def _behavior_target(
     return home
 
 
-def _next_position(
+def _compute_path(
     tiles: list[list[dict[str, Any]]],
     start: tuple[int, int],
     target: tuple[int, int],
-    max_steps: int,
-) -> Optional[tuple[int, int]]:
-    """BFS over passable tiles; return the position after up to max_steps moves.
+) -> list[tuple[int, int]]:
+    """BFS over passable tiles; return the full path from start to target.
 
     Full-grid BFS on the 48x48 region is cheap and, unlike greedy stepping,
     routes NPCs through building doors instead of pinning them against walls.
-    Returns None when there is no move to make (arrived or unreachable).
+    The path excludes the start tile; it is empty when the NPC has already
+    arrived or the target is unreachable. Computed once per hour and cached on
+    the NPC so the movement sub-tick only pops steps.
     """
     if start == target:
-        return None
+        return []
     height, width = len(tiles), len(tiles[0])
     if not (0 <= target[0] < width and 0 <= target[1] < height):
-        return None
+        return []
     came_from: dict[tuple[int, int], tuple[int, int]] = {start: start}
     queue: deque[tuple[int, int]] = deque([start])
     while queue:
@@ -189,14 +194,14 @@ def _next_position(
             came_from[(nx, ny)] = current
             queue.append((nx, ny))
     if target not in came_from:
-        return None
+        return []
     path: list[tuple[int, int]] = []
     node = target
     while node != start:
         path.append(node)
         node = came_from[node]
     path.reverse()
-    return path[min(max_steps, len(path)) - 1]
+    return path
 
 
 # --------------------------------------------------------------------------- #
@@ -212,10 +217,11 @@ def update_hourly(
     npcs: list[dict[str, Any]],
     rng: random.Random,
 ) -> dict[str, Any]:
-    """Re-classify behaviors and move NPCs one hour forward.
+    """Re-classify behaviors and cache each NPC's path for the coming hour.
 
-    Mutates the NPC dicts in place and returns {"changed": [npc, ...],
-    "behavior_counts": {...}} so the caller can persist only what moved.
+    Movement itself happens in update_movement on the faster sub-tick. Mutates
+    the NPC dicts in place and returns {"changed": [npc, ...],
+    "behavior_counts": {...}} so the caller can persist only what changed.
     """
     behavior_model, _ = _get_models()
     region = state["region"]
@@ -251,17 +257,42 @@ def update_hourly(
             npc_changed = True
 
         target = _behavior_target(npc, behavior, centres, rng)
+        new_path: list[list[int]] = []
         if target is not None:
-            speed = FLEE_SPEED if behavior == "fleeing" else WALK_SPEED
             start = (int(round(npc.get("x", 0))), int(round(npc.get("y", 0))))
-            next_pos = _next_position(tiles, start, target, speed)
-            if next_pos is not None:
-                npc["x"], npc["y"] = float(next_pos[0]), float(next_pos[1])
-                npc_changed = True
+            new_path = [[x, y] for x, y in _compute_path(tiles, start, target)]
+        if new_path != npc.get("path", []):
+            npc["path"] = new_path
+            npc_changed = True
 
         if npc_changed:
             changed.append(npc)
     return {"changed": changed, "behavior_counts": behavior_counts}
+
+
+def update_movement(npcs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Pop cached path steps for one movement sub-tick.
+
+    Walking NPCs advance one tile, fleeing NPCs two. Returns the NPCs that
+    moved so the caller can persist just those.
+    """
+    changed: list[dict[str, Any]] = []
+    for npc in npcs:
+        if not _is_simulated(npc):
+            continue
+        path = npc.get("path") or []
+        if not path:
+            continue
+        steps = (
+            FLEE_TILES_PER_STEP
+            if npc.get("current_behavior") == "fleeing"
+            else WALK_TILES_PER_STEP
+        )
+        taken = path[:steps]
+        npc["path"] = path[len(taken):]
+        npc["x"], npc["y"] = float(taken[-1][0]), float(taken[-1][1])
+        changed.append(npc)
+    return changed
 
 
 # --------------------------------------------------------------------------- #

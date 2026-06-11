@@ -33,8 +33,8 @@
 - Fields: id, tier, name, age, species, occupation, region_id, x, y,
   appearance, personality_traits, dark_trait, redeeming_quality, trauma,
   skills, current_mood, mood_reason, faction_affiliations, relationships,
-  memory_buffer, player_sentiment, rumor_knowledge, current_behavior, home_x,
-  home_y, work_x, work_y, is_demon_lord, is_player, sprite_id.
+  memory_buffer, player_sentiment, rumor_knowledge, current_behavior, path,
+  home_x, home_y, work_x, work_y, is_demon_lord, is_player, sprite_id.
 - Relationships: references factions, other NPCs, and the player host identity.
 
 ## NPCSkills

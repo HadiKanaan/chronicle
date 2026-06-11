@@ -108,15 +108,28 @@ def test_bfs_routes_around_walls():
         [{"passable": not (x == 2 and y != 4)} for x in range(5)]
         for y in range(5)
     ]
-    pos = behavior._next_position(tiles, (0, 0), (4, 0), max_steps=100)
-    assert pos == (4, 0)
-    assert behavior._next_position(tiles, (0, 0), (0, 0), max_steps=5) is None
+    path = behavior._compute_path(tiles, (0, 0), (4, 0))
+    assert path[-1] == (4, 0)
+    assert all(tiles[y][x]["passable"] for x, y in path)
+    assert behavior._compute_path(tiles, (0, 0), (0, 0)) == []
 
 
-def test_bfs_respects_step_limit():
-    tiles = [[{"passable": True} for _ in range(10)] for _ in range(1)]
-    pos = behavior._next_position(tiles, (0, 0), (9, 0), max_steps=3)
-    assert pos == (3, 0)
+def test_movement_pops_cached_path_steps():
+    walker = {"id": "a", "x": 0.0, "y": 0.0, "tier": 2,
+              "current_behavior": "working", "path": [[1, 0], [2, 0], [3, 0]]}
+    fleer = {"id": "b", "x": 0.0, "y": 0.0, "tier": 2,
+             "current_behavior": "fleeing", "path": [[1, 0], [2, 0], [3, 0]]}
+    player = {"id": "c", "x": 0.0, "y": 0.0, "tier": 1, "is_player": True,
+              "current_behavior": "working", "path": [[1, 0]]}
+    arrived = {"id": "d", "x": 5.0, "y": 5.0, "tier": 3,
+               "current_behavior": "sleeping", "path": []}
+
+    moved = behavior.update_movement([walker, fleer, player, arrived])
+
+    assert [npc["id"] for npc in moved] == ["a", "b"]
+    assert (walker["x"], walker["y"]) == (1.0, 0.0) and walker["path"] == [[2, 0], [3, 0]]
+    assert (fleer["x"], fleer["y"]) == (2.0, 0.0) and fleer["path"] == [[3, 0]]
+    assert (player["x"], player["y"]) == (0.0, 0.0), "simulation must not move the player"
 
 
 # --------------------------------------------------------------------------- #
@@ -189,8 +202,10 @@ def test_world_clock_simulates_living_days(temp_db, monkeypatch):
     behaviors_seen: set[str] = set()
     weather_seen: set[str] = set()
     away_from_home_seen = False
-    for _ in range(72):  # three in-game days
+    for _ in range(72):  # three in-game days at full sub-tick cadence
         main._advance_one_hour()
+        for _ in range(main.MOVE_STEPS_PER_HOUR - 1):
+            main._advance_one_move_step()
         state = temp_db.get_world_state()
         weather_seen.add(state["region"]["current_weather"])
         for npc in temp_db.get_all_npcs():

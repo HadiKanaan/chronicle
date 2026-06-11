@@ -41,10 +41,14 @@ ALLOWED_ORIGINS = [
 ]
 
 # Autonomous world clock (Day 4): each real-time interval advances one in-game
-# hour, re-classifying NPC behavior and moving NPCs; at dawn the daily tick
-# rolls weather, moods, memories, and rumor structures.
+# hour, re-classifying NPC behavior and caching paths; at dawn the daily tick
+# rolls weather, moods, memories, and rumor structures. Between hours, a faster
+# movement sub-tick pops one cached path step per second so NPC motion is
+# visible at the frontend's 500ms polling cadence instead of jumping hourly.
 TICK_ENABLED = True
 REAL_SECONDS_PER_GAME_HOUR = 5.0
+REAL_SECONDS_PER_MOVE_STEP = 1.0
+MOVE_STEPS_PER_HOUR = max(1, int(REAL_SECONDS_PER_GAME_HOUR / REAL_SECONDS_PER_MOVE_STEP))
 
 _tick_rng = random.Random()
 
@@ -98,23 +102,39 @@ def _advance_one_hour() -> None:
 
     hourly = behavior.update_hourly(state, npcs, _tick_rng)
     _collect(hourly["changed"])
+    # Take the hour's first movement step immediately so the hour boundary
+    # isn't a frozen second; the sub-tick loop pops the rest.
+    _collect(behavior.update_movement(npcs))
 
     save_npcs(changed)
     save_world_state(state)
 
 
+def _advance_one_move_step() -> None:
+    """Pop one cached path step per NPC (movement sub-tick, no clock change)."""
+    npcs = get_all_npcs()
+    moved = behavior.update_movement(npcs)
+    save_npcs(moved)
+
+
 async def _world_tick_loop() -> None:
     """Advance game time on a real-time interval, independent of the player.
 
-    Runs in the background so the world progresses whether or not the frontend is
-    polling. DB work is offloaded to a thread so it never blocks the event loop
-    that serves /api/state, and each tick is isolated so one failure can't stop
-    the clock.
+    Every REAL_SECONDS_PER_MOVE_STEP a movement sub-tick pops cached path
+    steps; every MOVE_STEPS_PER_HOUR-th tick advances the in-game hour instead
+    (which also re-classifies behavior and recomputes paths). Runs in the
+    background so the world progresses whether or not the frontend is polling.
+    DB work is offloaded to a thread so it never blocks the event loop that
+    serves /api/state, and each tick is isolated so one failure can't stop the
+    clock.
     """
+    step = 0
     while True:
-        await asyncio.sleep(REAL_SECONDS_PER_GAME_HOUR)
+        await asyncio.sleep(REAL_SECONDS_PER_MOVE_STEP)
+        step = (step + 1) % MOVE_STEPS_PER_HOUR
+        advance = _advance_one_hour if step == 0 else _advance_one_move_step
         try:
-            await asyncio.to_thread(_advance_one_hour)
+            await asyncio.to_thread(advance)
         except Exception as exc:  # noqa: BLE001 - never let one tick kill the clock
             log_event(0, 0, "tick_error", f"World tick failed: {exc}")
 

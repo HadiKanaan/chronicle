@@ -83,6 +83,9 @@ class CharacterCard(BaseModel):
     player_sentiment: int = 50
     rumor_knowledge: list[str] = Field(default_factory=list)
     current_behavior: BehaviorState = BehaviorState.WORKING
+    # Cached BFS route toward the current behavior's destination; recomputed
+    # each in-game hour, popped one step per movement sub-tick.
+    path: list[list[int]] = Field(default_factory=list)
     home_x: float = 0
     home_y: float = 0
     work_x: float = 0
