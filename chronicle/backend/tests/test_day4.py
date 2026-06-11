@@ -141,6 +141,14 @@ def _make_world(seed=42):
     return world_gen.build_world(seed)
 
 
+def test_initial_moods_are_mostly_settled():
+    """Day 1 should not look like a town in panic: settled moods dominate."""
+    world = _make_world(seed=42)
+    moods = [npc.current_mood.value for npc in world["npcs"]]
+    settled = sum(1 for mood in moods if mood in ("neutral", "content", "happy"))
+    assert settled / len(moods) > 0.6
+
+
 def test_storm_writes_memories_and_a_rumor():
     world = _make_world()
     state = world["world_state"].model_dump()

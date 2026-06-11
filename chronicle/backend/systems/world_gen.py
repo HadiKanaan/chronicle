@@ -86,6 +86,20 @@ FACTION_BY_OCC = {
 
 RELATIONSHIP_TYPES = ["friend", "rival", "business_partner", "kin", "mentor", "neighbor"]
 
+# Starting mood distribution: mostly settled villagers with a few outliers for
+# flavor. A uniform draw over MoodType made ~3 in 8 NPCs start fearful/anxious/
+# suspicious, which the behavior classifier read as a town in panic on day 1.
+INITIAL_MOOD_WEIGHTS = [
+    (MoodType.NEUTRAL, 30),
+    (MoodType.CONTENT, 30),
+    (MoodType.HAPPY, 15),
+    (MoodType.ANXIOUS, 8),
+    (MoodType.SUSPICIOUS, 7),
+    (MoodType.ANGRY, 4),
+    (MoodType.GRIEVING, 3),
+    (MoodType.FEARFUL, 3),
+]
+
 
 # --------------------------------------------------------------------------- #
 # Source data
@@ -350,7 +364,10 @@ def _make_card(
         y=float(pos[1]),
         personality_traits=traits,
         skills=_skills_for(occ, rng),
-        current_mood=rng.choice(list(MoodType)),
+        current_mood=rng.choices(
+            [mood for mood, _ in INITIAL_MOOD_WEIGHTS],
+            weights=[weight for _, weight in INITIAL_MOOD_WEIGHTS],
+        )[0],
         current_behavior=BehaviorState.WORKING,
         home_x=float(home[0]),
         home_y=float(home[1]),

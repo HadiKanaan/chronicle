@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -52,6 +53,14 @@ MOVE_STEPS_PER_HOUR = max(1, int(REAL_SECONDS_PER_GAME_HOUR / REAL_SECONDS_PER_M
 
 _tick_rng = random.Random()
 
+# Serializes simulation writes. The tick functions load-mutate-save NPC dicts
+# on a worker thread; any other writer that touches simulated NPC state (the
+# Day 5 conversation endpoint applying card deltas) MUST hold this lock for its
+# whole read-modify-write, or the tick's bulk save will silently overwrite it.
+# Player-only writes (_apply_move) don't need it: the simulation never writes
+# the player NPC.
+_sim_lock = threading.Lock()
+
 
 def _advance_one_hour() -> None:
     """Advance the authoritative clock by one in-game hour.
@@ -62,6 +71,11 @@ def _advance_one_hour() -> None:
     land in rolling memory buffers, and new rumor structures persist (no
     propagation until Day 6). Demon Lord updates join on Day 6.
     """
+    with _sim_lock:
+        _advance_one_hour_locked()
+
+
+def _advance_one_hour_locked() -> None:
     state = get_world_state()
     if not state:
         return
@@ -112,9 +126,10 @@ def _advance_one_hour() -> None:
 
 def _advance_one_move_step() -> None:
     """Pop one cached path step per NPC (movement sub-tick, no clock change)."""
-    npcs = get_all_npcs()
-    moved = behavior.update_movement(npcs)
-    save_npcs(moved)
+    with _sim_lock:
+        npcs = get_all_npcs()
+        moved = behavior.update_movement(npcs)
+        save_npcs(moved)
 
 
 async def _world_tick_loop() -> None:
