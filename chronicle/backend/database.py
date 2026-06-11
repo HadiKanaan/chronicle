@@ -156,6 +156,20 @@ def save_npc(npc: dict[str, Any]) -> None:
         )
 
 
+def save_npcs(npcs: list[dict[str, Any]]) -> None:
+    """Persist many NPCs in one transaction (used by the hourly world tick)."""
+    if not npcs:
+        return
+    with _connect() as connection:
+        connection.executemany(
+            "INSERT OR REPLACE INTO npcs (id, tier, data) VALUES (?, ?, ?)",
+            [
+                (str(npc["id"]), int(npc.get("tier", 1)), _dumps(npc))
+                for npc in npcs
+            ],
+        )
+
+
 def get_all_npcs() -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute("SELECT data FROM npcs ORDER BY id ASC").fetchall()
@@ -235,6 +249,29 @@ def save_rumor(rumor: dict[str, Any]) -> None:
             "INSERT OR REPLACE INTO rumors (id, active, data) VALUES (?, ?, ?)",
             (str(rumor["id"]), active, _dumps(rumor)),
         )
+
+
+def get_rumor(rumor_id: str) -> Optional[dict[str, Any]]:
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT data FROM rumors WHERE id = ?",
+            (rumor_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return _loads(row["data"])
+
+
+def add_rumor_knowledge(rumor_id: str, npc_ids: list[str]) -> None:
+    """Record that the given NPCs now know a rumor (known-by tracking)."""
+    rumor = get_rumor(rumor_id)
+    if rumor is None:
+        return
+    known = rumor.setdefault("known_by_npc_ids", [])
+    for npc_id in npc_ids:
+        if npc_id not in known:
+            known.append(npc_id)
+    save_rumor(rumor)
 
 
 def log_event(day: int, hour: int, event_type: str, description: str) -> None:

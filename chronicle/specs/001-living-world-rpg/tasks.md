@@ -69,12 +69,12 @@
 
 ### Implementation for User Story 2
 
-- [ ] T019 [P] [US2] Implement the NPC behavior classifier and mood model training hooks in `backend/ml/train.py`
-- [ ] T020 [P] [US2] Implement the behavior state transitions and movement rules in `backend/systems/behavior.py`
-- [ ] T021 [P] [US2] Implement weather state changes and day/night timing in `backend/systems/weather.py`
-- [ ] T022 [US2] Advance daily ticks and apply behavior and weather updates in `backend/main.py`
+- [X] T019 [P] [US2] Implement the NPC behavior classifier and mood model training hooks in `backend/ml/train.py`
+- [X] T020 [P] [US2] Implement the behavior state transitions and movement rules in `backend/systems/behavior.py`
+- [X] T021 [P] [US2] Implement weather state changes and day/night timing in `backend/systems/weather.py`
+- [X] T022 [US2] Advance daily ticks and apply behavior and weather updates in `backend/main.py`
 - [X] T023 [US2] Render the tilemap, moving NPCs, day/night cycle, and HUD state in `frontend/src/GameCanvas.jsx`, `frontend/src/HUD.jsx`, and `frontend/src/App.jsx`
-- [ ] T024 [US2] Surface behavior and weather summaries in the render payload assembly in `backend/main.py`
+- [X] T024 [US2] Surface behavior and weather summaries in the render payload assembly in `backend/main.py`
 
 **Checkpoint**: The game looks and behaves alive, even before conversation, rumor, or antagonist systems are added.
 
@@ -107,7 +107,7 @@
 ### Implementation for User Story 4
 
 - [ ] T030 [P] [US4] Implement rumor propagation logic and decay in `backend/systems/rumors.py`
-- [ ] T031 [P] [US4] Add rumor persistence helpers and known-by tracking in `backend/database.py`
+- [X] T031 [P] [US4] Add rumor persistence helpers and known-by tracking in `backend/database.py` (done on Day 4: rumor structures persist with known-by tracking; propagation itself is T030/T032)
 - [ ] T032 [US4] Run rumor propagation on daily ticks and update NPC rumor knowledge in `backend/main.py` and `backend/systems/rumors.py`
 - [ ] T033 [US4] Display rumor-aware dialogue and rumor summaries in `backend/main.py` and `frontend/src/HUD.jsx`
 

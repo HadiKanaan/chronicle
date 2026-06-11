@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -20,11 +21,13 @@ from database import (
     init_db,
     log_event,
     save_npc,
+    save_npcs,
+    save_rumor,
     save_world_state,
     world_is_generated,
 )
 from models.world import RenderPayload, WorldState
-from systems import world_gen
+from systems import behavior, weather, world_gen
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -37,18 +40,23 @@ ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
 ]
 
-# Autonomous world clock. Disabled until Day 4 wires the simulation systems; the
-# scaffold lives here now so the architecture (backend-driven time, dumb frontend)
-# is fixed and the frontend never needs to know ticks exist.
-TICK_ENABLED = False
+# Autonomous world clock (Day 4): each real-time interval advances one in-game
+# hour, re-classifying NPC behavior and moving NPCs; at dawn the daily tick
+# rolls weather, moods, memories, and rumor structures.
+TICK_ENABLED = True
 REAL_SECONDS_PER_GAME_HOUR = 5.0
+
+_tick_rng = random.Random()
 
 
 def _advance_one_hour() -> None:
     """Advance the authoritative clock by one in-game hour.
 
-    Day 4 will apply behavior, weather, rumor, and Demon Lord updates here. For
-    now it only moves time forward so the loop is exercisable end to end.
+    Hourly: the behavior classifier re-evaluates every simulated NPC and walks
+    them toward home/work/tavern. Daily (at dawn): the weather classifier rolls
+    the region's weather, the mood model updates every NPC, significant events
+    land in rolling memory buffers, and new rumor structures persist (no
+    propagation until Day 6). Demon Lord updates join on Day 6.
     """
     state = get_world_state()
     if not state:
@@ -58,6 +66,40 @@ def _advance_one_hour() -> None:
         hour = 0
         state["current_day"] = int(state.get("current_day", 1)) + 1
     state["current_hour"] = hour
+    day = int(state.get("current_day", 1))
+
+    npcs = get_all_npcs()
+    changed_ids: set[str] = set()
+    changed: list[dict[str, Any]] = []
+
+    def _collect(updated: list[dict[str, Any]]) -> None:
+        for npc in updated:
+            if npc["id"] not in changed_ids:
+                changed_ids.add(npc["id"])
+                changed.append(npc)
+
+    if weather.is_daily_tick(hour):
+        weather_changed = weather.advance_weather(state["region"], _tick_rng)
+        if weather_changed:
+            log_event(
+                day, hour, "weather",
+                f"The weather turned to {state['region']['current_weather']}.",
+            )
+        daily = behavior.update_daily(state, npcs, weather_changed, _tick_rng)
+        _collect(daily["changed"])
+        for rumor in daily["rumors"]:
+            save_rumor(rumor)
+            log_event(day, hour, "rumor", f"Word spreads: {rumor['current_text']}")
+        log_event(
+            day, hour, "daily_tick",
+            f"Dawn of day {day}: {daily['mood_changes']} moods shifted, "
+            f"weather {state['region']['current_weather']}.",
+        )
+
+    hourly = behavior.update_hourly(state, npcs, _tick_rng)
+    _collect(hourly["changed"])
+
+    save_npcs(changed)
     save_world_state(state)
 
 
@@ -155,18 +197,6 @@ def _apply_move(direction: str) -> bool:
     return True
 
 
-def _hour_to_time_of_day(hour: int) -> str:
-    if 5 <= hour <= 7:
-        return "dawn"
-    if 8 <= hour <= 11:
-        return "morning"
-    if 12 <= hour <= 16:
-        return "afternoon"
-    if 17 <= hour <= 19:
-        return "dusk"
-    return "night"
-
-
 def _empty_render_payload() -> RenderPayload:
     return RenderPayload(
         tiles=[],
@@ -191,6 +221,10 @@ def _visible_npc_summary(npc: dict[str, Any]) -> dict[str, Any]:
         "sprite_id": npc.get("sprite_id", "human_base"),
         "name": npc.get("name", "Unknown"),
         "tier": npc.get("tier", 3),
+        # Day 4: behavior and mood summaries so the renderer can show why NPCs
+        # are where they are (display-only; backend remains the authority).
+        "behavior": npc.get("current_behavior", "working"),
+        "mood": npc.get("current_mood", "neutral"),
     }
 
 
@@ -216,6 +250,7 @@ def _build_render_payload() -> RenderPayload:
                 "name": npc.get("name", "Unknown"),
                 "occupation": npc.get("occupation", ""),
                 "tier": npc.get("tier", 1),
+                "mood": npc.get("current_mood", "neutral"),
                 # Inherited social context from the host NPC identity (US1).
                 "relationships": npc.get("relationships", []),
                 "faction_affiliations": npc.get("faction_affiliations", []),
@@ -243,7 +278,7 @@ def _build_render_payload() -> RenderPayload:
         tiles=tiles,
         npcs=npc_payload,
         player=player_payload,
-        time_of_day=_hour_to_time_of_day(world_state.current_hour),
+        time_of_day=weather.hour_to_time_of_day(world_state.current_hour),
         weather=region.current_weather,
         dialogue=world_state_data.get("dialogue") if isinstance(world_state_data, dict) else None,
         notifications=notifications,
