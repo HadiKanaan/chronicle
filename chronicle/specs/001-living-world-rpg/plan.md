@@ -168,7 +168,8 @@ player on screen, day/night cycle. Nothing AI yet.
 
 **Deliverables**:
 - Canvas-based tilemap renderer (32px tiles)
-- NPC sprites from Anokolisa pack rendered at NPC positions
+- NPC sprites from the Pixel Crawler pack rendered at NPC positions (backend emits
+  sprite_id; frontend maps it via a static sprite atlas)
 - Player sprite centered on screen
 - Arrow key movement sends input to backend
 - Day/night visual cycle (lighting/color shift)

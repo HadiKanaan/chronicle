@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,18 +18,87 @@ from database import (
     get_world_state,
     init_db,
     log_event,
+    save_world_state,
+    world_is_generated,
 )
 from models.world import RenderPayload, WorldState
+from systems import world_gen
 
 
 BASE_DIR = Path(__file__).resolve().parent
 FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
 
-app = FastAPI(title="Chronicle of the Velvet Lies API")
+# Local frontend dev origins (Vite). Explicit origins instead of "*" so the CORS
+# config stays valid even if credentialed requests are ever introduced.
+ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+# Autonomous world clock. Disabled until Day 4 wires the simulation systems; the
+# scaffold lives here now so the architecture (backend-driven time, dumb frontend)
+# is fixed and the frontend never needs to know ticks exist.
+TICK_ENABLED = False
+REAL_SECONDS_PER_GAME_HOUR = 5.0
+
+
+def _advance_one_hour() -> None:
+    """Advance the authoritative clock by one in-game hour.
+
+    Day 4 will apply behavior, weather, rumor, and Demon Lord updates here. For
+    now it only moves time forward so the loop is exercisable end to end.
+    """
+    state = get_world_state()
+    if not state:
+        return
+    hour = int(state.get("current_hour", 6)) + 1
+    if hour >= 24:
+        hour = 0
+        state["current_day"] = int(state.get("current_day", 1)) + 1
+    state["current_hour"] = hour
+    save_world_state(state)
+
+
+async def _world_tick_loop() -> None:
+    """Advance game time on a real-time interval, independent of the player.
+
+    Runs in the background so the world progresses whether or not the frontend is
+    polling. DB work is offloaded to a thread so it never blocks the event loop
+    that serves /api/state, and each tick is isolated so one failure can't stop
+    the clock.
+    """
+    while True:
+        await asyncio.sleep(REAL_SECONDS_PER_GAME_HOUR)
+        try:
+            await asyncio.to_thread(_advance_one_hour)
+        except Exception as exc:  # noqa: BLE001 - never let one tick kill the clock
+            log_event(0, 0, "tick_error", f"World tick failed: {exc}")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    # Generate the single region once; reopen the existing world on later starts.
+    if not world_is_generated():
+        summary = world_gen.generate_world()
+        log_event(
+            1, 6, "startup",
+            f"Generated new world: {summary['npc_count']} NPCs in {summary['region']} "
+            f"({summary['biome']}).",
+        )
+    tick_task = asyncio.create_task(_world_tick_loop()) if TICK_ENABLED else None
+    try:
+        yield
+    finally:
+        if tick_task is not None:
+            tick_task.cancel()
+
+
+app = FastAPI(title="Chronicle of the Velvet Lies API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -93,14 +164,28 @@ def _build_render_payload() -> RenderPayload:
         visible = _visible_npc_summary(npc)
         if world_state.player_npc_id is not None and npc.get("id") == world_state.player_npc_id:
             player_payload = {
+                "npc_id": npc.get("id"),
                 "x": visible["x"],
                 "y": visible["y"],
                 "sprite_id": visible["sprite_id"],
+                "name": npc.get("name", "Unknown"),
+                "occupation": npc.get("occupation", ""),
+                "tier": npc.get("tier", 1),
+                # Inherited social context from the host NPC identity (US1).
+                "relationships": npc.get("relationships", []),
+                "faction_affiliations": npc.get("faction_affiliations", []),
             }
             continue
         npc_payload.append(visible)
 
-    tiles = [tile.model_dump() for row in region.tiles for tile in row]
+    # Render tiles carry only display fields (x, y, tile_type) per the API
+    # contract; simulation-only fields (passable, building_id, resource) stay on
+    # the backend so the per-poll payload stays lean and the frontend stays dumb.
+    tiles = [
+        {"x": tile.x, "y": tile.y, "tile_type": tile.tile_type.value}
+        for row in region.tiles
+        for tile in row
+    ]
     faction_reputations = {
         faction["name"]: faction.get("player_reputation", 50)
         for faction in get_all_factions()
@@ -124,11 +209,6 @@ def _build_render_payload() -> RenderPayload:
     )
 
 
-@app.on_event("startup")
-def _startup() -> None:
-    init_db()
-
-
 @app.get("/api/state", response_model=RenderPayload)
 def get_state() -> RenderPayload:
     return _build_render_payload()
@@ -142,8 +222,8 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
 
 @app.post("/api/generate-world")
 def generate_world() -> JSONResponse:
-    log_event(1, 6, "generate_world", "World generation requested")
-    return JSONResponse({"status": "not implemented"})
+    summary = world_gen.generate_world()
+    return JSONResponse({"status": "generated", **summary})
 
 
 @app.get("/api/npcs")

@@ -15,6 +15,10 @@ DB_PATH = DB_DIR / "chronicle.db"
 def _connect() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
+    # WAL lets the background world clock write while polls read concurrently;
+    # busy_timeout makes brief lock contention wait instead of raising.
+    connection.execute("PRAGMA journal_mode=WAL")
+    connection.execute("PRAGMA busy_timeout=5000")
     return connection
 
 
@@ -105,6 +109,35 @@ def save_world_state(world_state: dict[str, Any]) -> None:
         )
 
 
+def world_is_generated() -> bool:
+    state = get_world_state()
+    return bool(state and state.get("game_started"))
+
+
+def clear_world() -> None:
+    """Remove all generated world data so a fresh world can be written."""
+    with _connect() as connection:
+        for table in ("world_state", "npcs", "factions", "faction_relationships", "rumors"):
+            connection.execute(f"DELETE FROM {table}")
+
+
+def save_world(
+    world_state: dict[str, Any],
+    npcs: list[dict[str, Any]],
+    factions: list[dict[str, Any]],
+    faction_relationships: list[dict[str, Any]],
+) -> None:
+    """Persist a freshly generated world, replacing any existing world data."""
+    clear_world()
+    save_world_state(world_state)
+    for npc in npcs:
+        save_npc(npc)
+    for faction in factions:
+        save_faction(faction)
+    for relationship in faction_relationships:
+        save_faction_relationship(relationship)
+
+
 def get_npc(npc_id: str) -> Optional[dict[str, Any]]:
     with _connect() as connection:
         row = connection.execute("SELECT data FROM npcs WHERE id = ?", (npc_id,)).fetchone()
@@ -160,6 +193,30 @@ def save_faction(faction: dict[str, Any]) -> None:
 def get_all_factions() -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute("SELECT data FROM factions ORDER BY id ASC").fetchall()
+        return [_loads(row["data"]) for row in rows]
+
+
+def save_faction_relationship(relationship: dict[str, Any]) -> None:
+    with _connect() as connection:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO faction_relationships
+                (faction_a_id, faction_b_id, data)
+            VALUES (?, ?, ?)
+            """,
+            (
+                str(relationship["faction_a_id"]),
+                str(relationship["faction_b_id"]),
+                _dumps(relationship),
+            ),
+        )
+
+
+def get_faction_relationships() -> list[dict[str, Any]]:
+    with _connect() as connection:
+        rows = connection.execute(
+            "SELECT data FROM faction_relationships ORDER BY faction_a_id ASC"
+        ).fetchall()
         return [_loads(row["data"]) for row in rows]
 
 

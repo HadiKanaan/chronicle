@@ -18,9 +18,9 @@
 
 **Purpose**: Project initialization and basic structure for the solo 8-day build
 
-- [ ] T001 Create the backend dependency manifest in `backend/requirements.txt` with FastAPI, Uvicorn, Pydantic, sqlite3, scikit-learn, numpy, and Ollama
-- [ ] T002 Create the frontend Vite scaffold in `frontend/package.json`, `frontend/vite.config.js`, and `frontend/index.html` with a development proxy to the backend
-- [ ] T003 [P] Create the frontend entry module and asset folder in `frontend/src/main.jsx` and `frontend/public/assets/`
+- [X] T001 Create the backend dependency manifest in `backend/requirements.txt` with FastAPI, Uvicorn, Pydantic, sqlite3, scikit-learn, numpy, and Ollama
+- [X] T002 Create the frontend Vite scaffold in `frontend/package.json`, `frontend/vite.config.js`, and `frontend/index.html` with a development proxy to the backend
+- [X] T003 [P] Create the frontend entry module and asset folder in `frontend/src/main.jsx` and `frontend/public/assets/`
 
 ---
 
@@ -28,15 +28,15 @@
 
 **Purpose**: Core infrastructure that must be complete before any user story can be implemented
 
-- [ ] T004 [P] Define the world data structures in `backend/models/world.py`
-- [ ] T005 [P] Define the NPC card and relationship data structures in `backend/models/npc.py`
-- [ ] T006 [P] Define the faction data structures in `backend/models/faction.py`
-- [ ] T007 [P] Define the rumor data structure in `backend/models/rumor.py`
-- [ ] T008 Create the package initializer modules in `backend/models/__init__.py`, `backend/systems/__init__.py`, and `backend/ml/__init__.py`
-- [ ] T009 Implement SQLite schema creation, JSON serialization, and CRUD helpers in `backend/database.py`
-- [ ] T010 Implement the FastAPI app shell, CORS, static file serving, startup initialization, and stub endpoints in `backend/main.py`
-- [ ] T011 Implement the frontend API client methods in `frontend/src/api.js`
-- [ ] T012 Implement the frontend polling shell and shared render-state holder in `frontend/src/App.jsx`
+- [X] T004 [P] Define the world data structures in `backend/models/world.py`
+- [X] T005 [P] Define the NPC card and relationship data structures in `backend/models/npc.py`
+- [X] T006 [P] Define the faction data structures in `backend/models/faction.py`
+- [X] T007 [P] Define the rumor data structure in `backend/models/rumor.py`
+- [X] T008 Create the package initializer modules in `backend/models/__init__.py`, `backend/systems/__init__.py`, and `backend/ml/__init__.py`
+- [X] T009 Implement SQLite schema creation, JSON serialization, and CRUD helpers in `backend/database.py`
+- [X] T010 Implement the FastAPI app shell, CORS, static file serving, startup initialization, and stub endpoints in `backend/main.py`
+- [X] T011 Implement the frontend API client methods in `frontend/src/api.js`
+- [X] T012 Implement the frontend polling shell and shared render-state holder in `frontend/src/App.jsx`
 
 **Checkpoint**: The backend starts cleanly, the frontend shell loads, and the core data shapes exist before simulation logic is added.
 
@@ -50,12 +50,12 @@
 
 ### Implementation for User Story 1
 
-- [ ] T013 [P] [US1] Implement the single-region world generator and host NPC selection flow in `backend/systems/world_gen.py`
-- [ ] T014 [P] [US1] Train or stub the biome and civilization seed hooks in `backend/ml/train.py`
-- [ ] T015 [US1] Generate the initial tilemap, buildings, and NPC placement in `backend/systems/world_gen.py`
-- [ ] T016 [US1] Persist the generated world state, faction records, and host NPC assignment in `backend/database.py`
-- [ ] T017 [US1] Populate the startup render payload with the player host NPC identity and inherited relationships in `backend/main.py`
-- [ ] T018 [US1] Seed the names, occupations, and personality source data in `backend/data/names.json`
+- [X] T013 [P] [US1] Implement the single-region world generator and host NPC selection flow in `backend/systems/world_gen.py`
+- [X] T014 [P] [US1] Train or stub the biome and civilization seed hooks in `backend/ml/train.py`
+- [X] T015 [US1] Generate the initial tilemap, buildings, and NPC placement in `backend/systems/world_gen.py`
+- [X] T016 [US1] Persist the generated world state, faction records, and host NPC assignment in `backend/database.py`
+- [X] T017 [US1] Populate the startup render payload with the player host NPC identity and inherited relationships in `backend/main.py`
+- [X] T018 [US1] Seed the names, occupations, and personality source data in `backend/data/names.json`
 
 **Checkpoint**: The world can be generated once, saved, and reopened with the player occupying an existing NPC identity.
 
