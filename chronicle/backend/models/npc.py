@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -82,6 +82,12 @@ class CharacterCard(BaseModel):
     memory_buffer: list[str] = Field(default_factory=list)
     player_sentiment: int = 50
     rumor_knowledge: list[str] = Field(default_factory=list)
+    # Day 5 (LLM conversations): how the NPC talks, whether the one-off LLM
+    # card enrichment has run, and a rolling transcript of recent exchanges
+    # with the player ({day, hour, player_text, npc_response} entries).
+    conversation_style: str = ""
+    llm_enriched: bool = False
+    conversation_history: list[dict[str, Any]] = Field(default_factory=list)
     current_behavior: BehaviorState = BehaviorState.WORKING
     # Cached BFS route toward the current behavior's destination; recomputed
     # each in-game hour, popped one step per movement sub-tick.

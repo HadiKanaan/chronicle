@@ -390,3 +390,26 @@ def predict_weather(
     row = np.array([[current_idx, season_idx, pressure]])
     label = str(weather_model.predict(row)[0])
     return label if label in WEATHER_LABELS else "clear"
+
+
+# --------------------------------------------------------------------------- #
+# Conversation card-delta mood fallback (Day 5)
+# --------------------------------------------------------------------------- #
+_conversation_mood_model: Optional[Any] = None
+_conversation_mood_trained = False
+
+
+def predict_conversation_mood(valence_now: float, event_valence: float) -> str:
+    """Arbitrate an NPC's post-conversation mood when the LLM's card delta
+    proposes an invalid label.
+
+    The LLM proposes, the ML mood model validates: the conversation's tone
+    (its sentiment delta mapped to event valence) is scored like any other
+    daily event, with neutral weather and average social satisfaction so only
+    the exchange itself moves the needle.
+    """
+    global _conversation_mood_model, _conversation_mood_trained
+    if not _conversation_mood_trained:
+        _conversation_mood_model = train_mood_model()
+        _conversation_mood_trained = True
+    return predict_mood(_conversation_mood_model, valence_now, event_valence, 0.0, 0.5)

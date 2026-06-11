@@ -39,7 +39,7 @@ function cameraOrigin(focusPx, worldPx, viewPx) {
   return Math.max(0, Math.min(focusPx - viewPx / 2, worldPx - viewPx));
 }
 
-export default function GameCanvas({ gameState }) {
+export default function GameCanvas({ gameState, onNpcClick }) {
   const canvasRef = useRef(null);
   const imagesRef = useRef({});
   const [imagesReady, setImagesReady] = useState(false);
@@ -150,6 +150,9 @@ export default function GameCanvas({ gameState }) {
 
   useEffect(() => {
     const onKeyDown = (event) => {
+      // Arrow keys steer the player, not the dialogue input's cursor.
+      const tag = event.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       const directionMap = {
         ArrowUp: 'up',
         ArrowDown: 'down',
@@ -191,8 +194,8 @@ export default function GameCanvas({ gameState }) {
         nearest = npc;
       }
     }
-    if (nearest && nearestDist <= 1.0) {
-      sendInput({ type: 'interact', payload: { npc_id: nearest.id } }).catch(() => {});
+    if (nearest && nearestDist <= 1.0 && onNpcClick) {
+      onNpcClick(nearest);
     }
   };
 

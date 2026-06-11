@@ -214,7 +214,8 @@ Conversation endpoint working: player clicks NPC, dialogue box appears, LLM resp
 in character, card delta applied after.
 
 **Deliverables**:
-- Ollama instance running locally with Gemma 3 1B
+- Ollama instance running locally with qwen3:4b (thinking disabled per call;
+  see research.md decision 4 — Gemma 3 1B was dropped after testing)
 - Tier 1 NPC card generation prompt designed and tested (personality, dark trait,
   redeeming quality, conversation style)
 - POST /api/conversation endpoint: accepts npc_id + player_text, returns npc_response

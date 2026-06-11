@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getState } from './api';
+import { getState, getConversationContext, sendConversation } from './api';
 import GameCanvas from './GameCanvas';
 import DialogueBox from './DialogueBox';
 import HUD from './HUD';
@@ -20,7 +20,9 @@ const EMPTY_STATE = {
 
 export default function App() {
   const [gameState, setGameState] = useState(EMPTY_STATE);
-  const [dialogueState, setDialogueState] = useState(null);
+  // Dialogue is temporary UI state only: the backend owns the cards and the
+  // conversation outcome; this just holds the open panel's transcript.
+  const [dialogue, setDialogue] = useState(null);
   const [notifications, setNotifications] = useState([]);
 
   useEffect(() => {
@@ -33,7 +35,6 @@ export default function App() {
           return;
         }
         setGameState(nextState);
-        setDialogueState(nextState.dialogue ?? null);
         setNotifications((nextState.notifications ?? []).slice(-5));
       } catch (error) {
         if (!cancelled) {
@@ -51,6 +52,83 @@ export default function App() {
     };
   }, []);
 
+  const openDialogue = async (npc) => {
+    setDialogue({
+      npcId: npc.id,
+      npcName: npc.name,
+      occupation: '',
+      mood: npc.mood ?? 'neutral',
+      disposition: '',
+      remembered: [],
+      lines: [],
+      busy: true
+    });
+    try {
+      const context = await getConversationContext(npc.id);
+      setDialogue((current) => {
+        if (!current || current.npcId !== npc.id) {
+          return current;
+        }
+        return {
+          ...current,
+          npcName: context.npc_name,
+          occupation: context.occupation,
+          mood: context.mood,
+          disposition: context.disposition,
+          remembered: context.remembered ?? [],
+          lines: (context.history ?? []).flatMap((entry) => [
+            { speaker: 'player', text: entry.player_text },
+            { speaker: 'npc', text: entry.npc_response }
+          ]),
+          busy: false
+        };
+      });
+    } catch (error) {
+      setDialogue((current) =>
+        current && current.npcId === npc.id ? { ...current, busy: false } : current
+      );
+    }
+  };
+
+  const sendLine = async (text) => {
+    const npcId = dialogue?.npcId;
+    if (!npcId || !text.trim()) {
+      return;
+    }
+    setDialogue((current) =>
+      current && current.npcId === npcId
+        ? {
+            ...current,
+            lines: [...current.lines, { speaker: 'player', text }],
+            busy: true
+          }
+        : current
+    );
+    try {
+      const result = await sendConversation(npcId, text);
+      setDialogue((current) =>
+        current && current.npcId === npcId
+          ? {
+              ...current,
+              mood: result.mood,
+              lines: [...current.lines, { speaker: 'npc', text: result.npc_response }],
+              busy: false
+            }
+          : current
+      );
+    } catch (error) {
+      setDialogue((current) =>
+        current && current.npcId === npcId
+          ? {
+              ...current,
+              lines: [...current.lines, { speaker: 'npc', text: '...gives no answer.' }],
+              busy: false
+            }
+          : current
+      );
+    }
+  };
+
   const visibleState = {
     ...gameState,
     notifications
@@ -59,12 +137,12 @@ export default function App() {
   return (
     <div style={styles.shell}>
       <div style={styles.canvasPanel}>
-        <GameCanvas gameState={visibleState} />
+        <GameCanvas gameState={visibleState} onNpcClick={openDialogue} />
       </div>
       <div style={styles.sidebar}>
         <HUD gameState={visibleState} />
       </div>
-      <DialogueBox dialogue={dialogueState} onClose={() => setDialogueState(null)} />
+      <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={() => setDialogue(null)} />
     </div>
   );
 }

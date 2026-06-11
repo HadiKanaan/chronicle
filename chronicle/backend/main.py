@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +17,7 @@ from database import (
     get_all_factions,
     get_all_npcs,
     get_npc,
+    get_npcs_by_tier,
     get_recent_log,
     get_world_state,
     init_db,
@@ -28,7 +29,7 @@ from database import (
     world_is_generated,
 )
 from models.world import RenderPayload, WorldState
-from systems import behavior, weather, world_gen
+from systems import behavior, conversation, weather, world_gen
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -154,6 +155,38 @@ async def _world_tick_loop() -> None:
             log_event(0, 0, "tick_error", f"World tick failed: {exc}")
 
 
+def _warm_llm_and_enrich_tier1() -> None:
+    """Pre-warm the LLM, then enrich any un-enriched Tier 1 cards (Day 5).
+
+    Runs once per startup on a daemon thread. The slow LLM calls happen outside
+    the simulation lock (each one rides the conversation module's single-call
+    queue); only the read-modify-write of each card holds _sim_lock, so the
+    world clock never stalls behind a generation. Conversations that arrive
+    mid-enrichment simply queue behind the in-flight call.
+    """
+    if not conversation.llm_available():
+        log_event(0, 0, "llm", "Ollama unreachable; conversations will use stub replies.")
+        return
+    conversation.prewarm()
+    enriched = 0
+    for npc in get_npcs_by_tier(1):
+        if npc.get("is_player") or npc.get("llm_enriched"):
+            continue
+        details = conversation.generate_card_details(npc)
+        if details is None:
+            continue
+        with _sim_lock:
+            fresh = get_npc(npc["id"])
+            if fresh is None:
+                continue
+            fresh.update(details)
+            fresh["llm_enriched"] = True
+            save_npc(fresh)
+        enriched += 1
+    if enriched:
+        log_event(0, 0, "llm", f"LLM enriched {enriched} Tier 1 character card(s).")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     init_db()
@@ -166,6 +199,9 @@ async def lifespan(_app: FastAPI):
             f"({summary['biome']}).",
         )
     tick_task = asyncio.create_task(_world_tick_loop()) if TICK_ENABLED else None
+    # Day 5: warm the conversation model and flesh out Tier 1 cards without
+    # blocking startup; daemon so it never holds up shutdown.
+    threading.Thread(target=_warm_llm_and_enrich_tier1, daemon=True).start()
     try:
         yield
     finally:
@@ -339,6 +375,123 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
 
     log_event(1, 6, player_input.type, f"Input received: {player_input.type}")
     return JSONResponse({"status": "ok", "accepted": True})
+
+
+class ConversationInput(BaseModel):
+    npc_id: str
+    player_text: str = Field(min_length=1, max_length=300)
+
+
+def _apply_conversation_delta(
+    npc_id: str,
+    player_name: str,
+    player_text: str,
+    delta: dict[str, Any],
+    day: int,
+    hour: int,
+) -> Optional[dict[str, Any]]:
+    """Apply a parsed card delta to the NPC and persist it. Returns the card.
+
+    Holds _sim_lock for the whole read-modify-write: the hourly tick bulk-saves
+    NPCs from its own snapshot, so an unlocked write here would be silently
+    overwritten. The NPC is re-fetched inside the lock because the tick may
+    have moved or re-moodified it while the LLM was generating.
+    """
+    with _sim_lock:
+        npc = get_npc(npc_id)
+        if npc is None:
+            return None
+        npc["current_mood"] = delta.get("mood", npc.get("current_mood", "neutral"))
+        npc["mood_reason"] = f"after speaking with {player_name}"
+        sentiment = int(npc.get("player_sentiment", 50)) + int(delta.get("sentiment_delta", 0))
+        npc["player_sentiment"] = max(0, min(100, sentiment))
+        if delta.get("memory"):
+            behavior.remember(npc, f"Day {day}: {delta['memory']}")
+        history = npc.setdefault("conversation_history", [])
+        history.append(
+            {
+                "day": day,
+                "hour": hour,
+                "player_text": player_text,
+                "npc_response": delta.get("reply", ""),
+            }
+        )
+        if len(history) > conversation.HISTORY_CAP:
+            del history[: len(history) - conversation.HISTORY_CAP]
+        save_npc(npc)
+        return npc
+
+
+def _run_conversation(npc_id: str, player_text: str) -> dict[str, Any]:
+    """One full conversation turn (runs on a worker thread).
+
+    The LLM call happens against a snapshot of the card, outside _sim_lock --
+    it can take seconds, and holding the lock would freeze the world clock.
+    Only the delta application locks.
+    """
+    state = get_world_state()
+    if not state:
+        raise HTTPException(status_code=409, detail="World not generated yet")
+    npc = get_npc(npc_id)
+    if npc is None:
+        raise HTTPException(status_code=404, detail="Unknown NPC")
+    if npc.get("is_player"):
+        raise HTTPException(status_code=400, detail="You mutter to yourself.")
+
+    player = get_npc(state.get("player_npc_id") or "")
+    player_name = player.get("name", "a stranger") if player else "a stranger"
+    day = int(state.get("current_day", 1))
+    hour = int(state.get("current_hour", 6))
+
+    if int(npc.get("tier", 3)) == 1:
+        delta = conversation.converse_tier1(npc, player_name, player_text)
+    else:
+        delta = conversation.stub_converse(npc)
+
+    updated = _apply_conversation_delta(npc_id, player_name, player_text, delta, day, hour)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Unknown NPC")
+    log_event(day, hour, "conversation", f"{player_name} spoke with {updated['name']}.")
+
+    # Display-ready contract: the parsed reply and the post-delta mood only.
+    # The raw card-delta JSON never leaves the backend.
+    return {
+        "npc_response": delta.get("reply", "..."),
+        "mood": updated.get("current_mood", "neutral"),
+    }
+
+
+@app.post("/api/conversation")
+async def post_conversation(payload: ConversationInput) -> JSONResponse:
+    # Offloaded to a thread so the multi-second LLM call never blocks the event
+    # loop serving /api/state polls; the frontend awaits with a thinking state.
+    result = await asyncio.to_thread(_run_conversation, payload.npc_id, payload.player_text.strip())
+    return JSONResponse(result)
+
+
+@app.get("/api/conversation/{npc_id}")
+def get_conversation_context(npc_id: str) -> JSONResponse:
+    """Display-ready context for opening a dialogue: who the NPC is, how they
+    feel about the player, what they remember, and recent exchanges (US3)."""
+    npc = get_npc(npc_id)
+    if npc is None:
+        raise HTTPException(status_code=404, detail="Unknown NPC")
+    history = [
+        {"player_text": entry.get("player_text", ""), "npc_response": entry.get("npc_response", "")}
+        for entry in npc.get("conversation_history", [])[-conversation.HISTORY_CAP:]
+    ]
+    return JSONResponse(
+        {
+            "npc_id": npc.get("id"),
+            "npc_name": npc.get("name", "Unknown"),
+            "occupation": npc.get("occupation", ""),
+            "tier": npc.get("tier", 3),
+            "mood": npc.get("current_mood", "neutral"),
+            "disposition": conversation.sentiment_phrase(int(npc.get("player_sentiment", 50))),
+            "remembered": npc.get("memory_buffer", [])[-5:],
+            "history": history,
+        }
+    )
 
 
 @app.post("/api/generate-world")

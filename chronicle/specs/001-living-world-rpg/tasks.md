@@ -88,11 +88,11 @@
 
 ### Implementation for User Story 3
 
-- [ ] T025 [P] [US3] Implement the Ollama conversation client and single-call queue in `backend/systems/conversation.py`
-- [ ] T026 [P] [US3] Implement Tier 1 NPC card generation prompts and card-delta parsing in `backend/systems/conversation.py` and `backend/ml/train.py`
-- [ ] T027 [US3] Add the conversation endpoint, card-delta application, and memory-buffer updates in `backend/main.py` and `backend/database.py`
-- [ ] T028 [US3] Wire NPC click-to-talk and dialogue rendering in `frontend/src/GameCanvas.jsx` and `frontend/src/DialogueBox.jsx`
-- [ ] T029 [US3] Surface persistent NPC memory and prior interaction context in `backend/main.py`
+- [X] T025 [P] [US3] Implement the Ollama conversation client and single-call queue in `backend/systems/conversation.py`
+- [X] T026 [P] [US3] Implement Tier 1 NPC card generation prompts and card-delta parsing in `backend/systems/conversation.py` and `backend/ml/train.py`
+- [X] T027 [US3] Add the conversation endpoint, card-delta application, and memory-buffer updates in `backend/main.py` and `backend/database.py` (database.py needed no new helpers — get_npc/save_npc/log_event already cover the locked read-modify-write)
+- [X] T028 [US3] Wire NPC click-to-talk and dialogue rendering in `frontend/src/GameCanvas.jsx` and `frontend/src/DialogueBox.jsx`
+- [X] T029 [US3] Surface persistent NPC memory and prior interaction context in `backend/main.py` (GET /api/conversation/{npc_id})
 
 **Checkpoint**: Tier 1 NPCs can converse in character and retain remembered context across multiple interactions.
 

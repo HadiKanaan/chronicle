@@ -27,12 +27,18 @@
 
 ## Decision 4: Local Ollama for strategic and conversational AI
 
-- Decision: Use locally running Ollama with Gemma 3 1B for NPC conversation and
-  Demon Lord decision generation.
+- Decision: Use locally running Ollama with qwen3:4b for NPC conversation and
+  Demon Lord decision generation. Every call must disable thinking
+  (`think: false`) — qwen3 is a reasoning model and otherwise burns minutes on
+  `<think>` blocks — and send `keep_alive` so the model stays resident between
+  calls (~8s warm vs ~18s cold on the target CPU-only laptop).
 - Rationale: It keeps the demo self-contained and avoids cloud dependency risk
-  during the solo build.
+  during the solo build. 4B balances laptop speed with reliable JSON
+  instruction-following for card deltas.
 - Alternatives considered: Hosted LLM APIs were rejected because they add setup
-  friction and dependency risk.
+  friction and dependency risk. Gemma 3 1B (the original pick) was rejected
+  after testing as too weak for reliable JSON card-deltas; qwen2.5-coder:7b was
+  rejected as coder-tuned, weaker at roleplay, and slow on the target laptop.
 
 ## Decision 5: scikit-learn for visible behavior models
 

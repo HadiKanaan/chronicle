@@ -38,6 +38,28 @@ export async function getNPCs() {
   return response.json();
 }
 
+export async function getConversationContext(npcId) {
+  const response = await fetch(`/api/conversation/${encodeURIComponent(npcId)}`);
+  if (!response.ok) {
+    throw new Error(`Failed to load conversation context: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function sendConversation(npcId, playerText) {
+  const response = await fetch('/api/conversation', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ npc_id: npcId, player_text: playerText })
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to send conversation: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function getLog() {
   const response = await fetch('/api/log');
   if (!response.ok) {
