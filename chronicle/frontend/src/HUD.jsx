@@ -1,15 +1,29 @@
+function formatHour(hour) {
+  const h = Number.isFinite(hour) ? ((hour % 24) + 24) % 24 : 0;
+  return `${String(h).padStart(2, '0')}:00`;
+}
+
 export default function HUD({ gameState }) {
   const factionEntries = Object.entries(gameState.faction_reputations ?? {});
   const recentNotifications = (gameState.notifications ?? []).slice(-3);
+  const player = gameState.player;
 
   return (
     <aside style={styles.panel}>
       <section>
         <h2 style={styles.heading}>World</h2>
         <div>Day: {gameState.current_day}</div>
-        <div>Time: {gameState.time_of_day}</div>
+        <div>Time: {formatHour(gameState.current_hour)} ({gameState.time_of_day})</div>
         <div>Weather: {gameState.weather}</div>
       </section>
+
+      {player ? (
+        <section style={styles.section}>
+          <h2 style={styles.heading}>You</h2>
+          <div>{player.name}</div>
+          {player.occupation ? <div style={styles.muted}>{player.occupation}</div> : null}
+        </section>
+      ) : null}
 
       <section style={styles.section}>
         <h2 style={styles.heading}>Faction Reputation</h2>

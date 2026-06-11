@@ -14,10 +14,12 @@ from pydantic import BaseModel, Field
 from database import (
     get_all_factions,
     get_all_npcs,
+    get_npc,
     get_recent_log,
     get_world_state,
     init_db,
     log_event,
+    save_npc,
     save_world_state,
     world_is_generated,
 )
@@ -108,6 +110,49 @@ app.add_middleware(
 class PlayerInput(BaseModel):
     type: str
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+_MOVE_DELTAS = {
+    "up": (0, -1),
+    "down": (0, 1),
+    "left": (-1, 0),
+    "right": (1, 0),
+}
+
+
+def _apply_move(direction: str) -> bool:
+    """Move the player's host NPC one passable tile and persist it.
+
+    The backend stays authoritative for position: the frontend only posts intent
+    ("move left"), and the camera scroll the player sees is a consequence of this
+    write showing up on the next /api/state poll.
+    """
+    delta = _MOVE_DELTAS.get(direction)
+    if delta is None:
+        return False
+    state = get_world_state()
+    if not state:
+        return False
+    player_id = state.get("player_npc_id")
+    if not player_id:
+        return False
+    npc = get_npc(player_id)
+    if not npc:
+        return False
+
+    region = state["region"]
+    target_x = int(round(npc.get("x", 0))) + delta[0]
+    target_y = int(round(npc.get("y", 0))) + delta[1]
+    if not (0 <= target_x < region["width"] and 0 <= target_y < region["height"]):
+        return False
+    tile = region["tiles"][target_y][target_x]
+    if not tile.get("passable", True):
+        return False
+
+    npc["x"] = float(target_x)
+    npc["y"] = float(target_y)
+    save_npc(npc)
+    return True
 
 
 def _hour_to_time_of_day(hour: int) -> str:
@@ -216,6 +261,12 @@ def get_state() -> RenderPayload:
 
 @app.post("/api/input")
 def post_input(player_input: PlayerInput) -> JSONResponse:
+    # Movement is high-frequency, so it updates state silently (no log spam).
+    # Interactions are rare and player-facing, so they are logged.
+    if player_input.type == "move":
+        accepted = _apply_move(str(player_input.payload.get("direction", "")))
+        return JSONResponse({"status": "ok", "accepted": accepted})
+
     log_event(1, 6, player_input.type, f"Input received: {player_input.type}")
     return JSONResponse({"status": "ok", "accepted": True})
 
