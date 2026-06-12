@@ -75,3 +75,5 @@ class RenderPayload(BaseModel):
     # recent decisions for the HUD.
     rumors: list[str] = Field(default_factory=list)
     demon_lord_decisions: list[str] = Field(default_factory=list)
+    # True while the world clock holds still (dialogue open / daily decision).
+    world_paused: bool = False

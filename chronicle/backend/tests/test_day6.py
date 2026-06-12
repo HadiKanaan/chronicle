@@ -445,6 +445,62 @@ def test_demon_lord_deferral_is_capped_so_the_day_never_starves(monkeypatch):
     assert time.monotonic() - start < 1.0  # gave up at the cap
 
 
+def test_world_freezes_for_dialogue_and_daily_decision(monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "_active_conversations", 0)
+    monkeypatch.setattr(main, "_dialogue_freeze_until", 0.0)
+    main._demon_lord_deciding.clear()
+    assert main._world_frozen() is False  # nothing active: the clock runs
+
+    monkeypatch.setattr(main, "_active_conversations", 1)
+    assert main._world_frozen() is True  # conversation turn in flight
+    monkeypatch.setattr(main, "_active_conversations", 0)
+
+    main._demon_lord_deciding.set()
+    try:
+        assert main._world_frozen() is True  # daily LLM call in flight
+    finally:
+        main._demon_lord_deciding.clear()
+    assert main._world_frozen() is False
+
+
+def test_dialogue_window_signals_freeze_and_resume(monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "_active_conversations", 0)
+    monkeypatch.setattr(main, "_dialogue_freeze_until", 0.0)
+    main._demon_lord_deciding.clear()
+
+    main.post_input(main.PlayerInput(type="dialogue_open"))
+    assert main._world_frozen() is True  # rolling freeze window armed
+    main.post_input(main.PlayerInput(type="dialogue_close"))
+    assert main._world_frozen() is False  # closing the window resumes time
+
+
+def test_conversation_turn_freezes_world_and_books_out_cleanly(temp_db, monkeypatch):
+    import main
+
+    monkeypatch.setattr(main, "_active_conversations", 0)
+    monkeypatch.setattr(main, "_dialogue_freeze_until", 0.0)
+    _seed_world(temp_db)
+    seen = {}
+
+    original = main._run_conversation_inner
+
+    def spying_inner(npc_id, player_text):
+        seen["frozen_mid_turn"] = main._world_frozen()
+        return original(npc_id, player_text)
+
+    monkeypatch.setattr(main, "_run_conversation_inner", spying_inner)
+    main._run_conversation("npc_00001", "Quiet night.")  # tier 2 -> stub reply, no LLM
+
+    assert seen["frozen_mid_turn"] is True  # world held still during the turn
+    assert main._active_conversations == 0  # in-flight counter restored
+    assert main._world_frozen() is True  # rolling window still covers the dialogue
+    main._clear_dialogue_freeze()
+
+
 def test_run_demon_lord_day_decides_once_per_day(temp_db, monkeypatch):
     import main
 

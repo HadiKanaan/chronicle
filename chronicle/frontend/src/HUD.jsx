@@ -16,7 +16,10 @@ export default function HUD({ gameState }) {
       <section>
         <h2 style={styles.heading}>World</h2>
         <div>Day: {gameState.current_day}</div>
-        <div>Time: {formatHour(gameState.current_hour)} ({gameState.time_of_day})</div>
+        <div>
+          Time: {formatHour(gameState.current_hour)} ({gameState.time_of_day})
+          {gameState.world_paused ? <span style={styles.paused}> ⏸ paused</span> : null}
+        </div>
         <div>Weather: {gameState.weather}</div>
       </section>
 
@@ -122,5 +125,8 @@ const styles = {
   },
   muted: {
     color: '#9ca3af'
+  },
+  paused: {
+    color: '#8ab4f8'
   }
 };

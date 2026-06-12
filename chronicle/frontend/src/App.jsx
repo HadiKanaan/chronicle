@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { getState, getConversationContext, sendConversation } from './api';
+import { getState, getConversationContext, sendConversation, sendInput } from './api';
 import GameCanvas from './GameCanvas';
 import DialogueBox from './DialogueBox';
 import HUD from './HUD';
@@ -53,6 +53,9 @@ export default function App() {
   }, []);
 
   const openDialogue = async (npc) => {
+    // Tell the backend the dialogue window is open: the world clock freezes
+    // so the NPC's mood and the town stay consistent mid-conversation.
+    sendInput({ type: 'dialogue_open', payload: {} }).catch(() => {});
     setDialogue({
       npcId: npc.id,
       npcName: npc.name,
@@ -134,6 +137,12 @@ export default function App() {
     notifications
   };
 
+  const closeDialogue = () => {
+    setDialogue(null);
+    // Resume the world clock when the dialogue window closes.
+    sendInput({ type: 'dialogue_close', payload: {} }).catch(() => {});
+  };
+
   return (
     <div style={styles.shell}>
       <div style={styles.canvasPanel}>
@@ -142,7 +151,7 @@ export default function App() {
       <div style={styles.sidebar}>
         <HUD gameState={visibleState} />
       </div>
-      <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={() => setDialogue(null)} />
+      <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={closeDialogue} />
     </div>
   );
 }

@@ -168,10 +168,59 @@ DECISION_MAX_DEFER = 210.0
 _LULL_POLL_SECONDS = 5.0
 _last_conversation_at = 0.0
 
+# World freeze: the clock holds still while the player is mid-dialogue and
+# while the Demon Lord's daily LLM call is in flight, so moods, positions, and
+# rumors stay consistent under the player's feet. The dialogue freeze is a
+# rolling window refreshed by dialogue_open input and by every conversation
+# turn - a lost dialogue_close (crashed tab) costs at most this window, never
+# a permanently frozen world.
+DIALOGUE_FREEZE_SECONDS = 180.0
+_dialogue_freeze_until = 0.0
+_active_conversations = 0
+_conversation_flight_lock = threading.Lock()
+_demon_lord_deciding = threading.Event()
+
 
 def _note_conversation_activity() -> None:
     global _last_conversation_at
     _last_conversation_at = time.monotonic()
+
+
+def _extend_dialogue_freeze() -> None:
+    global _dialogue_freeze_until
+    _dialogue_freeze_until = time.monotonic() + DIALOGUE_FREEZE_SECONDS
+
+
+def _clear_dialogue_freeze() -> None:
+    global _dialogue_freeze_until
+    _dialogue_freeze_until = 0.0
+
+
+def _conversation_started() -> None:
+    global _active_conversations
+    with _conversation_flight_lock:
+        _active_conversations += 1
+    _note_conversation_activity()
+    _extend_dialogue_freeze()
+
+
+def _conversation_finished() -> None:
+    global _active_conversations
+    with _conversation_flight_lock:
+        _active_conversations -= 1
+    _note_conversation_activity()
+    _extend_dialogue_freeze()
+
+
+def _world_frozen() -> bool:
+    """True while the world clock should hold still (stability over liveness):
+    a conversation turn in flight, an open dialogue window, or the Demon
+    Lord's daily decision being generated."""
+    return (
+        _demon_lord_deciding.is_set()
+        or _active_conversations > 0
+        or time.monotonic() < _dialogue_freeze_until
+    )
 
 
 def _wait_for_conversation_lull() -> None:
@@ -203,11 +252,17 @@ def _run_demon_lord_day(day: int) -> None:
         if any(d.get("day") == day for d in state.get("demon_lord_decisions", [])):
             return  # already decided today (e.g. restart mid-day)
         _wait_for_conversation_lull()
-        decision = demon_lord.generate_decision(
-            demon, state, get_all_factions(), get_active_rumors()
-        )
-        with _sim_lock:
-            demon_lord.apply_decision(decision, day)
+        # Freeze the clock for the decision itself (not the polite wait above)
+        # so its effects land on the same morning that prompted them.
+        _demon_lord_deciding.set()
+        try:
+            decision = demon_lord.generate_decision(
+                demon, state, get_all_factions(), get_active_rumors()
+            )
+            with _sim_lock:
+                demon_lord.apply_decision(decision, day)
+        finally:
+            _demon_lord_deciding.clear()
     except Exception as exc:  # noqa: BLE001 - antagonist failure must not kill anything
         log_event(day, 6, "demon_lord_error", f"Demon Lord decision failed: {exc}")
     finally:
@@ -260,6 +315,8 @@ async def _world_tick_loop() -> None:
     step = 0
     while True:
         await asyncio.sleep(REAL_SECONDS_PER_MOVE_STEP)
+        if _world_frozen():
+            continue  # dialogue or daily decision in progress: time holds still
         step = (step + 1) % MOVE_STEPS_PER_HOUR
         advance = _advance_one_hour if step == 0 else _advance_one_move_step
         try:
@@ -493,6 +550,7 @@ def _build_render_payload() -> RenderPayload:
         fog_map=fog_map,
         rumors=rumor_lines,
         demon_lord_decisions=decision_lines,
+        world_paused=_world_frozen(),
     )
 
 
@@ -508,6 +566,14 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
     if player_input.type == "move":
         accepted = _apply_move(str(player_input.payload.get("direction", "")))
         return JSONResponse({"status": "ok", "accepted": accepted})
+
+    # Dialogue window signals drive the world freeze; not log-worthy events.
+    if player_input.type == "dialogue_open":
+        _extend_dialogue_freeze()
+        return JSONResponse({"status": "ok", "accepted": True})
+    if player_input.type == "dialogue_close":
+        _clear_dialogue_freeze()
+        return JSONResponse({"status": "ok", "accepted": True})
 
     log_event(1, 6, player_input.type, f"Input received: {player_input.type}")
     return JSONResponse({"status": "ok", "accepted": True})
@@ -565,13 +631,13 @@ def _run_conversation(npc_id: str, player_text: str) -> dict[str, Any]:
     it can take seconds, and holding the lock would freeze the world clock.
     Only the delta application locks.
     """
-    _note_conversation_activity()
+    _conversation_started()
     try:
         return _run_conversation_inner(npc_id, player_text)
     finally:
-        # Stamp the end too: a long turn should hold the Demon Lord off just
-        # as much as a fresh one.
-        _note_conversation_activity()
+        # Stamp the end too: a long turn should hold the Demon Lord off (and
+        # keep the world frozen) just as much as a fresh one.
+        _conversation_finished()
 
 
 def _run_conversation_inner(npc_id: str, player_text: str) -> dict[str, Any]:
