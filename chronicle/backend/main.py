@@ -48,7 +48,10 @@ ALLOWED_ORIGINS = [
 # movement sub-tick pops one cached path step per second so NPC motion is
 # visible at the frontend's 500ms polling cadence instead of jumping hourly.
 TICK_ENABLED = True
-REAL_SECONDS_PER_GAME_HOUR = 5.0
+# 15s/hour = 6 real minutes per game day: fast enough that behavior shifts and
+# dawn ticks stay visible in a demo, slow enough that a 30-40s LLM conversation
+# no longer spans whole in-game days (at 5s/hour, moods churned mid-dialogue).
+REAL_SECONDS_PER_GAME_HOUR = 15.0
 REAL_SECONDS_PER_MOVE_STEP = 1.0
 MOVE_STEPS_PER_HOUR = max(1, int(REAL_SECONDS_PER_GAME_HOUR / REAL_SECONDS_PER_MOVE_STEP))
 

@@ -338,11 +338,18 @@ def _make_card(
     work: tuple[int, int],
     names: dict[str, Any],
     factions_by_id: dict[str, Faction],
+    used_names: set[str],
     rng: random.Random,
 ) -> CharacterCard:
-    first = rng.choice(names["human_first"])
-    last = rng.choice(names["human_last"])
-    name = f"{first} {last}"
+    # Re-roll on collision so no two villagers share a full name (the pool is
+    # small enough that ~80 draws produced exact duplicates). Bounded so a
+    # tiny name pool can never hang generation.
+    name = f"{rng.choice(names['human_first'])} {rng.choice(names['human_last'])}"
+    for _ in range(30):
+        if name not in used_names:
+            break
+        name = f"{rng.choice(names['human_first'])} {rng.choice(names['human_last'])}"
+    used_names.add(name)
 
     trait_pool = names["personality_traits"]
     if tier == 1:
@@ -476,13 +483,14 @@ def build_world(seed: Optional[int] = None) -> dict[str, Any]:
         roster.append((3, rng.choice(names["occupations_tier3"])))
 
     npcs: list[CharacterCard] = []
+    used_names: set[str] = set()
     for idx, (tier, occ) in enumerate(roster):
         npc_id = f"npc_{idx:05d}"
         home = house_centres[idx % len(house_centres)]
         work = _work_centre(occ, building_centres, plaza)
         # Initial position: at home for Day 2 (no movement yet).
         pos = home
-        card = _make_card(npc_id, tier, occ, pos, home, work, names, factions_by_id, rng)
+        card = _make_card(npc_id, tier, occ, pos, home, work, names, factions_by_id, used_names, rng)
         npcs.append(card)
 
     tier1 = [c for c in npcs if c.tier == NPCTier.TIER_1]

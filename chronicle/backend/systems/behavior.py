@@ -16,6 +16,7 @@ single source of truth and nothing here touches rendering.
 from __future__ import annotations
 
 import random
+import re
 from collections import deque
 from typing import Any, Optional
 
@@ -298,9 +299,22 @@ def update_movement(npcs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 # Daily tick: moods, memories, rumors
 # --------------------------------------------------------------------------- #
+# Memory entries are stamped "Day N: ..."; the stamp is ignored when checking
+# for duplicates so a repeated event refreshes rather than stacks.
+_DAY_STAMP = re.compile(r"^Day \d+:\s*")
+
+
 def remember(npc: dict[str, Any], text: str) -> None:
-    """Append a significant event to the NPC's rolling memory buffer."""
+    """Append a significant event to the NPC's rolling memory buffer.
+
+    A repeat of an event already in the buffer (same text apart from the day
+    stamp) replaces the old entry instead of duplicating it - repeated LLM
+    conversation memories and recurring storms were filling the 10-slot buffer
+    with near-identical lines and squeezing everything else out.
+    """
     buffer = npc.setdefault("memory_buffer", [])
+    core = _DAY_STAMP.sub("", text)
+    buffer[:] = [entry for entry in buffer if _DAY_STAMP.sub("", entry) != core]
     buffer.append(text)
     if len(buffer) > MEMORY_BUFFER_CAP:
         del buffer[: len(buffer) - MEMORY_BUFFER_CAP]

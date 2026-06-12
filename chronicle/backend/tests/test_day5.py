@@ -75,6 +75,28 @@ def test_parse_card_delta_never_leaks_json_from_unparseable_fragments():
     assert delta["reply"]
 
 
+def test_remember_refreshes_duplicate_memories_instead_of_stacking():
+    from systems import behavior
+
+    npc = {"id": "npc_x", "memory_buffer": []}
+    behavior.remember(npc, "Day 12: Fyra showed me a strange dagger.")
+    behavior.remember(npc, "Day 13: a storm broke over Aldenmoor.")
+    behavior.remember(npc, "Day 14: Fyra showed me a strange dagger.")
+    # The repeat replaced the day-12 entry and moved it to most-recent.
+    assert npc["memory_buffer"] == [
+        "Day 13: a storm broke over Aldenmoor.",
+        "Day 14: Fyra showed me a strange dagger.",
+    ]
+
+
+def test_world_gen_npc_names_are_unique():
+    from systems import world_gen
+
+    world = world_gen.build_world(seed=99)
+    names = [npc.name for npc in world["npcs"]]
+    assert len(names) == len(set(names))
+
+
 def test_predict_conversation_mood_returns_known_label():
     for event_valence in (0.0, 0.5, 1.0):
         mood = ml.predict_conversation_mood(0.5, event_valence)
