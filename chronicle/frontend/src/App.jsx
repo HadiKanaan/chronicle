@@ -52,6 +52,22 @@ export default function App() {
     };
   }, []);
 
+  const dialogueOpen = Boolean(dialogue);
+
+  // Heartbeat while a dialogue is open: re-arm the backend's rolling freeze
+  // window (180s) every 60s so slow reading/typing never lets time resume
+  // mid-conversation. If the tab dies, the window still self-expires after
+  // ~3 missed beats - the world can never be frozen forever.
+  useEffect(() => {
+    if (!dialogueOpen) {
+      return undefined;
+    }
+    const heartbeatId = window.setInterval(() => {
+      sendInput({ type: 'dialogue_open', payload: {} }).catch(() => {});
+    }, 60000);
+    return () => window.clearInterval(heartbeatId);
+  }, [dialogueOpen]);
+
   const openDialogue = async (npc) => {
     // Tell the backend the dialogue window is open: the world clock freezes
     // so the NPC's mood and the town stay consistent mid-conversation.
