@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from database import (
+    get_active_rumors,
     get_all_factions,
     get_all_npcs,
     get_npc,
@@ -29,7 +30,7 @@ from database import (
     world_is_generated,
 )
 from models.world import RenderPayload, WorldState
-from systems import behavior, conversation, weather, world_gen
+from systems import behavior, conversation, demon_lord, rumors, weather, world_gen
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -72,25 +73,33 @@ def _advance_one_hour() -> None:
     Hourly: the behavior classifier re-evaluates every simulated NPC and walks
     them toward home/work/tavern. Daily (at dawn): the weather classifier rolls
     the region's weather, the mood model updates every NPC, significant events
-    land in rolling memory buffers, and new rumor structures persist (no
-    propagation until Day 6). Demon Lord updates join on Day 6.
+    land in rolling memory buffers, new rumor structures persist, and existing
+    rumors propagate across relationships and decay (Day 6). The Demon Lord's
+    dawn decision runs on its own daemon thread because its LLM call takes
+    longer than a tick interval - the clock must never wait on it.
     """
     with _sim_lock:
-        _advance_one_hour_locked()
+        demon_day = _advance_one_hour_locked()
+    if demon_day is not None:
+        threading.Thread(target=_run_demon_lord_day, args=(demon_day,), daemon=True).start()
 
 
-def _advance_one_hour_locked() -> None:
+def _advance_one_hour_locked() -> Optional[int]:
+    """Returns the new day number when dawn just broke and a Demon Lord exists
+    (the caller then triggers its decision outside the lock), else None."""
     state = get_world_state()
     if not state:
-        return
+        return None
     hour = int(state.get("current_hour", 6)) + 1
     if hour >= 24:
         hour = 0
         state["current_day"] = int(state.get("current_day", 1)) + 1
     state["current_hour"] = hour
     day = int(state.get("current_day", 1))
+    dawn = weather.is_daily_tick(hour)
 
     npcs = get_all_npcs()
+    npcs_by_id = {npc["id"]: npc for npc in npcs}
     changed_ids: set[str] = set()
     changed: list[dict[str, Any]] = []
 
@@ -100,16 +109,30 @@ def _advance_one_hour_locked() -> None:
                 changed_ids.add(npc["id"])
                 changed.append(npc)
 
-    if weather.is_daily_tick(hour):
+    if dawn:
         weather_changed = weather.advance_weather(state["region"], _tick_rng)
         if weather_changed:
             log_event(
                 day, hour, "weather",
                 f"The weather turned to {state['region']['current_weather']}.",
             )
+
+        # Propagate yesterday's rumors before saving today's, so a newborn
+        # rumor never ages or spreads on its birth morning.
+        spread = rumors.propagate_daily(npcs, get_active_rumors(), _tick_rng)
+        _collect(spread["npc_changes"])
+        for rumor in spread["rumor_changes"]:
+            save_rumor(rumor)
+        if spread["spread_count"]:
+            log_event(
+                day, hour, "rumor",
+                f"Rumors reached {spread['spread_count']} more villager(s) overnight.",
+            )
+
         daily = behavior.update_daily(state, npcs, weather_changed, _tick_rng)
         _collect(daily["changed"])
         for rumor in daily["rumors"]:
+            _collect(rumors.seed_knowledge(rumor, npcs_by_id))
             save_rumor(rumor)
             log_event(day, hour, "rumor", f"Word spreads: {rumor['current_text']}")
         log_event(
@@ -126,6 +149,65 @@ def _advance_one_hour_locked() -> None:
 
     save_npcs(changed)
     save_world_state(state)
+    return day if dawn and state.get("demon_lord_npc_id") else None
+
+
+# Single-flight guard: a slow decision for day N must not overlap with day
+# N+1's (only plausible if the LLM stalls for a whole 6-minute game day).
+_demon_lord_busy = threading.Lock()
+
+
+def _run_demon_lord_day(day: int) -> None:
+    """One Demon Lord dawn decision (runs on a daemon thread).
+
+    The LLM call rides the conversation module's single-call queue OUTSIDE
+    _sim_lock against snapshots; only apply_decision's read-modify-write of
+    factions, victims, rumor, and world state holds the lock.
+    """
+    if not _demon_lord_busy.acquire(blocking=False):
+        return
+    try:
+        state = get_world_state()
+        if not state:
+            return
+        demon = get_npc(state.get("demon_lord_npc_id") or "")
+        if demon is None:
+            return
+        if any(d.get("day") == day for d in state.get("demon_lord_decisions", [])):
+            return  # already decided today (e.g. restart mid-day)
+        decision = demon_lord.generate_decision(
+            demon, state, get_all_factions(), get_active_rumors()
+        )
+        with _sim_lock:
+            demon_lord.apply_decision(decision, day)
+    except Exception as exc:  # noqa: BLE001 - antagonist failure must not kill anything
+        log_event(day, 6, "demon_lord_error", f"Demon Lord decision failed: {exc}")
+    finally:
+        _demon_lord_busy.release()
+
+
+def _ensure_demon_lord() -> None:
+    """Inject the Demon Lord into the EXISTING world (Day 6).
+
+    Creates the NPC card and sets demon_lord_npc_id on the live world state.
+    Never regenerates the world - regeneration would wipe every NPC's
+    accumulated memories and conversation history. Idempotent across restarts.
+    """
+    with _sim_lock:
+        state = get_world_state()
+        if not state:
+            return
+        existing_id = state.get("demon_lord_npc_id")
+        if existing_id and get_npc(existing_id) is not None:
+            return
+        card = demon_lord.build_demon_lord(state["region"])
+        save_npc(card)
+        state["demon_lord_npc_id"] = card["id"]
+        save_world_state(state)
+        log_event(
+            int(state.get("current_day", 1)), int(state.get("current_hour", 6)),
+            "demon_lord", f"{card['name']} has risen beyond the eastern hills.",
+        )
 
 
 def _advance_one_move_step() -> None:
@@ -201,6 +283,8 @@ async def lifespan(_app: FastAPI):
             f"Generated new world: {summary['npc_count']} NPCs in {summary['region']} "
             f"({summary['biome']}).",
         )
+    # Day 6: the antagonist joins the live world in place; never regenerate.
+    _ensure_demon_lord()
     tick_task = asyncio.create_task(_world_tick_loop()) if TICK_ENABLED else None
     # Day 5: warm the conversation model and flesh out Tier 1 cards without
     # blocking startup; daemon so it never holds up shutdown.
@@ -348,6 +432,21 @@ def _build_render_payload() -> RenderPayload:
 
     fog_map = world_state_data.get("fog_map", []) if isinstance(world_state_data, dict) else []
 
+    # Day 6: display-ready strings only - the newest whispers and the Demon
+    # Lord's recent moves, newest first. Raw rumor/decision dicts stay backend.
+    rumor_lines = [
+        f"{rumor['current_text']} (known to {len(rumor.get('known_by_npc_ids', []))})"
+        for rumor in sorted(
+            get_active_rumors(), key=lambda r: str(r.get("id", "")), reverse=True
+        )[:4]
+        if rumor.get("current_text")
+    ]
+    decision_lines = [
+        entry.get("summary", "")
+        for entry in reversed(world_state_data.get("demon_lord_decisions", [])[-3:])
+        if entry.get("summary")
+    ]
+
     return RenderPayload(
         tiles=tiles,
         npcs=npc_payload,
@@ -360,6 +459,8 @@ def _build_render_payload() -> RenderPayload:
         current_day=world_state.current_day,
         current_hour=world_state.current_hour,
         fog_map=fog_map,
+        rumors=rumor_lines,
+        demon_lord_decisions=decision_lines,
     )
 
 
@@ -447,7 +548,10 @@ def _run_conversation(npc_id: str, player_text: str) -> dict[str, Any]:
     hour = int(state.get("current_hour", 6))
 
     if int(npc.get("tier", 3)) == 1:
-        delta = conversation.converse_tier1(npc, player_name, player_text)
+        # Day 6: dialogue is rumor-aware - the prompt carries the actual texts
+        # of rumors this NPC knows, not a count placeholder.
+        rumor_texts = rumors.known_rumor_texts(npc, get_active_rumors())
+        delta = conversation.converse_tier1(npc, player_name, player_text, rumor_texts)
     else:
         delta = conversation.stub_converse(npc)
 
@@ -500,6 +604,7 @@ def get_conversation_context(npc_id: str) -> JSONResponse:
 @app.post("/api/generate-world")
 def generate_world() -> JSONResponse:
     summary = world_gen.generate_world()
+    _ensure_demon_lord()
     return JSONResponse({"status": "generated", **summary})
 
 

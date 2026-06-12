@@ -7,6 +7,9 @@ export default function HUD({ gameState }) {
   const factionEntries = Object.entries(gameState.faction_reputations ?? {});
   const recentNotifications = (gameState.notifications ?? []).slice(-3);
   const player = gameState.player;
+  // Display-ready strings straight from the backend payload (Day 6).
+  const rumors = gameState.rumors ?? [];
+  const demonLordDecisions = gameState.demon_lord_decisions ?? [];
 
   return (
     <aside style={styles.panel}>
@@ -34,6 +37,32 @@ export default function HUD({ gameState }) {
             <div key={name} style={styles.row}>
               <span>{name}</span>
               <span>{score}</span>
+            </div>
+          ))
+        )}
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.heading}>Demon Lord</h2>
+        {demonLordDecisions.length === 0 ? (
+          <div style={styles.muted}>No sign of the Demon Lord yet.</div>
+        ) : (
+          demonLordDecisions.map((item, index) => (
+            <div key={`${item}-${index}`} style={styles.demonLord}>
+              {item}
+            </div>
+          ))
+        )}
+      </section>
+
+      <section style={styles.section}>
+        <h2 style={styles.heading}>Rumors Abroad</h2>
+        {rumors.length === 0 ? (
+          <div style={styles.muted}>The town is quiet.</div>
+        ) : (
+          rumors.map((item, index) => (
+            <div key={`${item}-${index}`} style={styles.rumor}>
+              {item}
             </div>
           ))
         )}
@@ -79,6 +108,17 @@ const styles = {
   notification: {
     padding: '6px 0',
     borderBottom: '1px solid #262c35'
+  },
+  demonLord: {
+    padding: '6px 0',
+    borderBottom: '1px solid #3a2026',
+    color: '#e08a8a'
+  },
+  rumor: {
+    padding: '6px 0',
+    borderBottom: '1px solid #262c35',
+    color: '#c9b97e',
+    fontStyle: 'italic'
   },
   muted: {
     color: '#9ca3af'

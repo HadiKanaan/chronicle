@@ -253,8 +253,17 @@ def sentiment_phrase(sentiment: int) -> str:
     return "hostile"
 
 
-def build_conversation_prompt(npc: dict[str, Any], player_name: str) -> str:
-    """Assemble the system prompt from the NPC's persistent card."""
+def build_conversation_prompt(
+    npc: dict[str, Any],
+    player_name: str,
+    rumor_texts: Optional[list[str]] = None,
+) -> str:
+    """Assemble the system prompt from the NPC's persistent card.
+
+    rumor_texts are the actual texts of rumors the NPC knows (resolved by the
+    caller - this module never touches the database), so dialogue can repeat
+    and react to what is spreading through town (Day 6 / US4).
+    """
     traits = ", ".join(npc.get("personality_traits", [])) or "unremarkable"
     mood = npc.get("current_mood", "neutral")
     mood_reason = npc.get("mood_reason", "")
@@ -298,9 +307,9 @@ def build_conversation_prompt(npc: dict[str, Any], player_name: str) -> str:
             lines.append(f"{player_name}: {entry.get('player_text', '')}")
             lines.append(f"You: {entry.get('npc_response', '')}")
 
-    rumors = npc.get("rumor_knowledge", [])
-    if rumors:
-        lines.append(f"You have heard {len(rumors)} rumor(s) lately.")
+    if rumor_texts:
+        lines.append("Rumors you have heard around town (you may bring them up):")
+        lines.extend(f"- {text}" for text in rumor_texts)
 
     moods = ", ".join(sorted(VALID_MOODS))
     lines.append(
@@ -319,14 +328,19 @@ def build_conversation_prompt(npc: dict[str, Any], player_name: str) -> str:
     return "\n".join(lines)
 
 
-def converse_tier1(npc: dict[str, Any], player_name: str, player_text: str) -> dict[str, Any]:
+def converse_tier1(
+    npc: dict[str, Any],
+    player_name: str,
+    player_text: str,
+    rumor_texts: Optional[list[str]] = None,
+) -> dict[str, Any]:
     """One LLM conversation turn. Falls back to a stub if Ollama is down.
 
     Returns {"reply", "mood", "sentiment_delta", "memory", "used_llm"} with
     every field already validated and display-safe.
     """
     raw = _call_llm(
-        system=build_conversation_prompt(npc, player_name),
+        system=build_conversation_prompt(npc, player_name, rumor_texts),
         user=player_text,
         json_format=True,
         num_predict=CONVERSE_NUM_PREDICT,

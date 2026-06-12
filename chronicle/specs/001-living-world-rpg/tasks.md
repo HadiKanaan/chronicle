@@ -106,10 +106,10 @@
 
 ### Implementation for User Story 4
 
-- [ ] T030 [P] [US4] Implement rumor propagation logic and decay in `backend/systems/rumors.py`
+- [X] T030 [P] [US4] Implement rumor propagation logic and decay in `backend/systems/rumors.py`
 - [X] T031 [P] [US4] Add rumor persistence helpers and known-by tracking in `backend/database.py` (done on Day 4: rumor structures persist with known-by tracking; propagation itself is T030/T032)
-- [ ] T032 [US4] Run rumor propagation on daily ticks and update NPC rumor knowledge in `backend/main.py` and `backend/systems/rumors.py`
-- [ ] T033 [US4] Display rumor-aware dialogue and rumor summaries in `backend/main.py` and `frontend/src/HUD.jsx`
+- [X] T032 [US4] Run rumor propagation on daily ticks and update NPC rumor knowledge in `backend/main.py` and `backend/systems/rumors.py`
+- [X] T033 [US4] Display rumor-aware dialogue and rumor summaries in `backend/main.py` and `frontend/src/HUD.jsx` (conversation prompts now carry the actual rumor texts the NPC knows)
 
 **Checkpoint**: Rumors can spread through the world and affect what NPCs know and say.
 
@@ -123,10 +123,10 @@
 
 ### Implementation for User Story 5
 
-- [ ] T034 [P] [US5] Implement the Demon Lord strategy profile and dawn decision generation in `backend/systems/demon_lord.py`
-- [ ] T035 [P] [US5] Implement faction reputation scoring and decision effects in `backend/systems/demon_lord.py` and `backend/database.py`
-- [ ] T036 [US5] Execute Demon Lord decisions on the daily tick in `backend/main.py` and `backend/systems/demon_lord.py`
-- [ ] T037 [US5] Surface Demon Lord decisions and faction reputation changes in `backend/main.py` and `frontend/src/HUD.jsx`
+- [X] T034 [P] [US5] Implement the Demon Lord strategy profile and dawn decision generation in `backend/systems/demon_lord.py`
+- [X] T035 [P] [US5] Implement faction reputation scoring and decision effects in `backend/systems/demon_lord.py` and `backend/database.py`
+- [X] T036 [US5] Execute Demon Lord decisions on the daily tick in `backend/main.py` and `backend/systems/demon_lord.py` (injected into the existing live world; decision runs on a daemon thread, LLM outside `_sim_lock`)
+- [X] T037 [US5] Surface Demon Lord decisions and faction reputation changes in `backend/main.py` and `frontend/src/HUD.jsx`
 
 **Checkpoint**: The antagonist is visible, active, and influencing the simulation every in-game day.
 

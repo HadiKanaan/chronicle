@@ -54,6 +54,9 @@ class WorldState(BaseModel):
     demon_lord_npc_id: Optional[str] = None
     player_npc_id: Optional[str] = None
     game_started: bool = False
+    # Day 6: rolling record of the Demon Lord's dawn decisions
+    # ({day, action_type, summary} entries, newest last, capped).
+    demon_lord_decisions: list[dict] = Field(default_factory=list)
 
 
 class RenderPayload(BaseModel):
@@ -68,3 +71,7 @@ class RenderPayload(BaseModel):
     current_day: int = 1
     current_hour: int = 6
     fog_map: list[dict] = Field(default_factory=list)
+    # Day 6: display-ready strings only - rumor summaries and the Demon Lord's
+    # recent decisions for the HUD.
+    rumors: list[str] = Field(default_factory=list)
+    demon_lord_decisions: list[str] = Field(default_factory=list)

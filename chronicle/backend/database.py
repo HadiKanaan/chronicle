@@ -204,6 +204,21 @@ def save_faction(faction: dict[str, Any]) -> None:
         )
 
 
+def adjust_faction_reputation(faction_id: str, delta: int) -> Optional[int]:
+    """Shift a faction's standing by delta, clamped to 0..100.
+
+    Returns the new score, or None for an unknown faction (Day 6: Demon Lord
+    decision effects land here after key validation).
+    """
+    faction = get_faction(faction_id)
+    if faction is None:
+        return None
+    score = max(0, min(100, int(faction.get("player_reputation", 50)) + int(delta)))
+    faction["player_reputation"] = score
+    save_faction(faction)
+    return score
+
+
 def get_all_factions() -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute("SELECT data FROM factions ORDER BY id ASC").fetchall()
