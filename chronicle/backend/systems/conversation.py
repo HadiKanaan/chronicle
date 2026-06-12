@@ -24,6 +24,7 @@ the endpoint never depends on the LLM being up.
 from __future__ import annotations
 
 import json
+import logging
 import random
 import re
 import threading
@@ -64,6 +65,8 @@ VALID_MOODS = {mood.value for mood in MoodType}
 # Single-call queue: every Ollama request in the process serializes here.
 _llm_lock = threading.Lock()
 _client: Optional[Any] = None
+
+logger = logging.getLogger("chronicle.llm")
 
 _stub_rng = random.Random()
 
@@ -125,7 +128,9 @@ def _call_llm(
                 options={"temperature": temperature, "num_predict": num_predict},
             )
         return response["message"]["content"]
-    except Exception:  # noqa: BLE001 - any transport/model failure -> stub path
+    except Exception as exc:  # noqa: BLE001 - any transport/model failure -> stub path
+        # Surfaced on the uvicorn console so silent stub replies are explainable.
+        logger.warning("LLM call failed (%s): %r", MODEL, exc)
         return None
 
 
@@ -192,6 +197,10 @@ def parse_card_delta(raw: str, current_mood: str) -> dict[str, Any]:
     mood falls back to the ML mood model (LLM proposes, ML validates), a missing
     delta becomes a no-op, and strings are truncated. The raw JSON never leaves
     the backend.
+
+    The extra "reply_was_genuine" flag is internal plumbing for converse_tier1's
+    retry: False means the model never spoke a usable reply and the returned
+    line is salvage (memory-field rescue or a canned safe line).
     """
     data = _extract_json(raw)
     if data is None:
@@ -203,15 +212,25 @@ def parse_card_delta(raw: str, current_mood: str) -> dict[str, Any]:
             "mood": current_mood,
             "sentiment_delta": 0,
             "memory": "",
+            "reply_was_genuine": False,
         }
 
-    reply = ""
+    raw_reply = ""
     for key in ("reply", "response", "text", "say", "speech", "dialogue", "answer"):
         value = data.get(key)
         if isinstance(value, str) and value.strip():
-            reply = value.strip()
+            raw_reply = value.strip()
             break
-    if not reply or _looks_like_json_guts(reply):
+    reply_was_genuine = bool(raw_reply) and not _looks_like_json_guts(raw_reply)
+    reply = raw_reply if reply_was_genuine else ""
+    if not reply:
+        # Measured live (Day 6): when qwen3:4b drops "reply" - roughly a third
+        # to half of calls - the spoken answer usually lands in "memory"
+        # instead. Salvage it as the line before resorting to a canned one.
+        memory_candidate = str(data.get("memory", "")).strip()
+        if memory_candidate and not _looks_like_json_guts(memory_candidate):
+            reply = memory_candidate
+    if not reply:
         reply = _safe_line(current_mood)
     reply = reply[:REPLY_MAX_CHARS]
 
@@ -235,6 +254,7 @@ def parse_card_delta(raw: str, current_mood: str) -> dict[str, Any]:
         "mood": mood,
         "sentiment_delta": sentiment_delta,
         "memory": memory,
+        "reply_was_genuine": reply_was_genuine,
     }
 
 
@@ -323,7 +343,8 @@ def build_conversation_prompt(
         '"sentiment_delta": <integer -10..10, how this exchange shifted your '
         f'feeling toward {player_name}>, '
         '"memory": "<one short sentence you will remember, or empty>"} '
-        'Always include all four fields; "reply" comes first and must never be empty.'
+        'Always include all four fields. "reply" comes FIRST and must never be '
+        "empty or missing - an answer without \"reply\" is thrown away unheard."
     )
     return "\n".join(lines)
 
@@ -337,21 +358,35 @@ def converse_tier1(
     """One LLM conversation turn. Falls back to a stub if Ollama is down.
 
     Returns {"reply", "mood", "sentiment_delta", "memory", "used_llm"} with
-    every field already validated and display-safe.
+    every field already validated and display-safe. When the model drops the
+    "reply" field (a frequent qwen3:4b quirk) the call is retried once - cheap
+    (~8s) since the prompt is already warm in the cache; if the retry drops it
+    too, the first attempt's salvaged delta is used.
     """
-    raw = _call_llm(
-        system=build_conversation_prompt(npc, player_name, rumor_texts),
-        user=player_text,
-        json_format=True,
-        num_predict=CONVERSE_NUM_PREDICT,
-    )
-    if raw is None:
-        result = stub_converse(npc)
-        result["used_llm"] = False
-        return result
-    delta = parse_card_delta(raw, npc.get("current_mood", "neutral"))
-    delta["used_llm"] = True
-    return delta
+    system = build_conversation_prompt(npc, player_name, rumor_texts)
+    current_mood = npc.get("current_mood", "neutral")
+    salvaged: Optional[dict[str, Any]] = None
+    for _ in range(2):
+        raw = _call_llm(
+            system=system,
+            user=player_text,
+            json_format=True,
+            num_predict=CONVERSE_NUM_PREDICT,
+        )
+        if raw is None:
+            break
+        delta = parse_card_delta(raw, current_mood)
+        if delta.pop("reply_was_genuine", True):
+            delta["used_llm"] = True
+            return delta
+        if salvaged is None:
+            salvaged = delta
+    if salvaged is not None:
+        salvaged["used_llm"] = True
+        return salvaged
+    result = stub_converse(npc)
+    result["used_llm"] = False
+    return result
 
 
 # --------------------------------------------------------------------------- #

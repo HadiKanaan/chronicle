@@ -24,6 +24,7 @@ def test_parse_card_delta_valid_json():
         "mood": "content",
         "sentiment_delta": 3,
         "memory": "met a stranger",
+        "reply_was_genuine": True,
     }
 
 
@@ -58,14 +59,22 @@ def test_parse_card_delta_salvages_reply_from_broken_envelope():
     assert delta["reply"] == "The river took my brother."
 
 
-def test_parse_card_delta_never_leaks_json_when_reply_field_missing():
-    # Observed live with qwen3:4b: the model sometimes drops "reply" entirely.
+def test_parse_card_delta_salvages_memory_as_reply_when_reply_dropped():
+    # Observed live with qwen3:4b (measured ~30-60% of calls on Day 6): the
+    # model drops "reply" and the spoken answer lands in "memory" instead.
     raw = '{"mood": "content", "sentiment_delta": 0, "memory": "Fyra showed me a dagger."}'
     delta = conversation.parse_card_delta(raw, "content")
-    assert '"mood"' not in delta["reply"]
-    assert '"sentiment_delta"' not in delta["reply"]
-    assert delta["reply"]  # a safe in-character line instead
+    assert delta["reply"] == "Fyra showed me a dagger."  # memory-field rescue
     assert delta["memory"] == "Fyra showed me a dagger."
+    assert delta["reply_was_genuine"] is False  # signals converse_tier1 to retry
+
+
+def test_parse_card_delta_safe_line_when_reply_and_memory_both_unusable():
+    raw = '{"mood": "content", "sentiment_delta": 0, "memory": ""}'
+    delta = conversation.parse_card_delta(raw, "content")
+    assert delta["reply"]  # a safe in-character line
+    assert '"mood"' not in delta["reply"]
+    assert delta["reply_was_genuine"] is False
 
 
 def test_parse_card_delta_never_leaks_json_from_unparseable_fragments():
@@ -151,6 +160,47 @@ def test_converse_tier1_parses_llm_output(monkeypatch):
     assert result["used_llm"] is True
     assert result["reply"] == "State your business."
     assert result["mood"] == "suspicious"
+
+
+def test_converse_tier1_retries_once_when_reply_dropped(monkeypatch):
+    responses = iter(
+        [
+            '{"mood": "content", "sentiment_delta": 0, "memory": "answer hid in memory"}',
+            '{"reply": "Aye, the forge burns hot.", "mood": "content", "sentiment_delta": 1, "memory": ""}',
+        ]
+    )
+    calls = []
+    monkeypatch.setattr(
+        conversation, "_call_llm", lambda **kwargs: calls.append(1) or next(responses)
+    )
+    result = conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "How's the forge?")
+    assert len(calls) == 2  # dropped reply triggered exactly one retry
+    assert result["reply"] == "Aye, the forge burns hot."
+    assert result["used_llm"] is True
+    assert "reply_was_genuine" not in result  # internal flag never leaves
+
+
+def test_converse_tier1_uses_first_salvage_when_retry_also_drops_reply(monkeypatch):
+    raw = '{"mood": "content", "sentiment_delta": 0, "memory": "The river keeps its secrets."}'
+    calls = []
+    monkeypatch.setattr(
+        conversation, "_call_llm", lambda **kwargs: calls.append(1) or raw
+    )
+    result = conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "Any secrets?")
+    assert len(calls) == 2  # exactly one retry, never more
+    assert result["reply"] == "The river keeps its secrets."  # memory-field rescue
+    assert result["used_llm"] is True
+
+
+def test_converse_tier1_single_call_when_reply_is_genuine(monkeypatch):
+    raw = '{"reply": "Well met.", "mood": "content", "sentiment_delta": 0, "memory": ""}'
+    calls = []
+    monkeypatch.setattr(
+        conversation, "_call_llm", lambda **kwargs: calls.append(1) or raw
+    )
+    result = conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "Hello.")
+    assert len(calls) == 1  # no needless retry cost
+    assert result["reply"] == "Well met."
 
 
 def test_converse_tier1_falls_back_to_stub_when_llm_down(monkeypatch):
