@@ -167,16 +167,16 @@ def test_known_rumor_texts_filters_orders_and_caps():
 # --------------------------------------------------------------------------- #
 def test_conversation_prompt_carries_actual_rumor_texts():
     npc = _npc("npc_a", name="Mara Vane", rumor_knowledge=["rumor_x"])
-    prompt = conversation.build_conversation_prompt(
+    block = conversation.build_situation_block(
         npc, "Aldric", rumor_texts=["Cultists struck the market stores."]
     )
-    assert "Cultists struck the market stores." in prompt
-    assert "rumor(s) lately" not in prompt  # the old count placeholder is gone
+    assert "Cultists struck the market stores." in block
+    assert "rumor(s) lately" not in block  # the old count placeholder is gone
 
 
 def test_conversation_prompt_without_rumors_stays_silent_about_them():
-    prompt = conversation.build_conversation_prompt(_npc("npc_a"), "Aldric", rumor_texts=[])
-    assert "Rumors you have heard" not in prompt
+    block = conversation.build_situation_block(_npc("npc_a"), "Aldric", rumor_texts=[])
+    assert "Rumors you have heard" not in block
 
 
 # --------------------------------------------------------------------------- #
@@ -418,9 +418,39 @@ def test_ensure_demon_lord_injects_into_existing_world_once(temp_db):
     assert len([n for n in temp_db.get_all_npcs() if n.get("is_demon_lord")]) == 1
 
 
+def test_demon_lord_defers_while_player_is_conversing(monkeypatch):
+    import time
+
+    import main
+
+    monkeypatch.setattr(main, "CONVERSATION_IDLE_GRACE", 0.2)
+    monkeypatch.setattr(main, "_LULL_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(main, "_last_conversation_at", time.monotonic())
+    start = time.monotonic()
+    main._wait_for_conversation_lull()
+    assert time.monotonic() - start >= 0.15  # held off until the grace expired
+
+
+def test_demon_lord_deferral_is_capped_so_the_day_never_starves(monkeypatch):
+    import time
+
+    import main
+
+    monkeypatch.setattr(main, "CONVERSATION_IDLE_GRACE", 9999.0)
+    monkeypatch.setattr(main, "DECISION_MAX_DEFER", 0.1)
+    monkeypatch.setattr(main, "_LULL_POLL_SECONDS", 0.02)
+    monkeypatch.setattr(main, "_last_conversation_at", time.monotonic())
+    start = time.monotonic()
+    main._wait_for_conversation_lull()
+    assert time.monotonic() - start < 1.0  # gave up at the cap
+
+
 def test_run_demon_lord_day_decides_once_per_day(temp_db, monkeypatch):
     import main
 
+    # Earlier endpoint tests stamp conversation activity; without resetting it
+    # the decision would politely sleep out its full deferral here.
+    monkeypatch.setattr(main, "_last_conversation_at", 0.0)
     _seed_world(temp_db)
     main._ensure_demon_lord()
     decision = {

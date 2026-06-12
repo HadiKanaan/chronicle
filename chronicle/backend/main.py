@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
@@ -156,6 +158,31 @@ def _advance_one_hour_locked() -> Optional[int]:
 # N+1's (only plausible if the LLM stalls for a whole 6-minute game day).
 _demon_lord_busy = threading.Lock()
 
+# Demon Lord politeness: its dawn decision shares the single-call LLM queue
+# with player conversations, and a decision in flight makes the player wait
+# 30-90s for a reply. The decision therefore defers while the player has
+# conversed recently, up to a cap that still lands it well before the next
+# dawn (a game day is ~6 real minutes).
+CONVERSATION_IDLE_GRACE = 90.0
+DECISION_MAX_DEFER = 210.0
+_LULL_POLL_SECONDS = 5.0
+_last_conversation_at = 0.0
+
+
+def _note_conversation_activity() -> None:
+    global _last_conversation_at
+    _last_conversation_at = time.monotonic()
+
+
+def _wait_for_conversation_lull() -> None:
+    """Block (on the decision's own daemon thread) until the player has been
+    quiet for CONVERSATION_IDLE_GRACE seconds, or DECISION_MAX_DEFER expires."""
+    start = time.monotonic()
+    while time.monotonic() - start < DECISION_MAX_DEFER:
+        if time.monotonic() - _last_conversation_at >= CONVERSATION_IDLE_GRACE:
+            return
+        time.sleep(_LULL_POLL_SECONDS)
+
 
 def _run_demon_lord_day(day: int) -> None:
     """One Demon Lord dawn decision (runs on a daemon thread).
@@ -175,6 +202,7 @@ def _run_demon_lord_day(day: int) -> None:
             return
         if any(d.get("day") == day for d in state.get("demon_lord_decisions", [])):
             return  # already decided today (e.g. restart mid-day)
+        _wait_for_conversation_lull()
         decision = demon_lord.generate_decision(
             demon, state, get_all_factions(), get_active_rumors()
         )
@@ -274,6 +302,10 @@ def _warm_llm_and_enrich_tier1() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Surface the LLM client's per-call timing/error lines on the console so
+    # slow or stubbed conversations are diagnosable at a glance.
+    logging.basicConfig(level=logging.WARNING)
+    logging.getLogger("chronicle.llm").setLevel(logging.INFO)
     init_db()
     # Generate the single region once; reopen the existing world on later starts.
     if not world_is_generated():
@@ -533,6 +565,16 @@ def _run_conversation(npc_id: str, player_text: str) -> dict[str, Any]:
     it can take seconds, and holding the lock would freeze the world clock.
     Only the delta application locks.
     """
+    _note_conversation_activity()
+    try:
+        return _run_conversation_inner(npc_id, player_text)
+    finally:
+        # Stamp the end too: a long turn should hold the Demon Lord off just
+        # as much as a fresh one.
+        _note_conversation_activity()
+
+
+def _run_conversation_inner(npc_id: str, player_text: str) -> dict[str, Any]:
     state = get_world_state()
     if not state:
         raise HTTPException(status_code=409, detail="World not generated yet")

@@ -142,15 +142,55 @@ def _tier1_npc(**overrides):
     return npc
 
 
-def test_conversation_prompt_carries_card_and_memory_context():
-    prompt = conversation.build_conversation_prompt(_tier1_npc(), "Aldric Snow")
+def test_character_prompt_is_static_and_carries_the_card():
+    prompt = conversation.build_character_prompt(_tier1_npc())
     assert "Mara Vane" in prompt
     assert "blacksmith" in prompt
     assert "resentful of the magistrate" in prompt
-    assert "a storm broke over Aldenmoor" in prompt  # memory buffer surfaced
-    assert "Hm. You again." in prompt  # prior exchange surfaced
-    assert "Aldric Snow" in prompt
     assert '"sentiment_delta"' in prompt  # card-delta JSON contract requested
+    # Volatile state must stay OUT of the system prompt: it has to remain
+    # byte-identical between turns or the Ollama prefix cache is useless.
+    assert "Current mood" not in prompt
+    assert "a storm broke over Aldenmoor" not in prompt
+    assert "Hm. You again." not in prompt
+    assert "Aldric Snow" not in prompt
+
+
+def test_situation_block_carries_volatile_context():
+    block = conversation.build_situation_block(
+        _tier1_npc(), "Aldric Snow", ["Cultists struck the market."]
+    )
+    assert "Current mood: content" in block
+    assert "Aldric Snow" in block  # disposition toward the player
+    assert "a storm broke over Aldenmoor" in block  # memory buffer surfaced
+    assert "Cultists struck the market." in block  # rumor texts surfaced
+
+
+def test_history_replays_as_chat_turns_with_reply_envelope():
+    import json
+
+    messages = conversation._history_messages(_tier1_npc())
+    assert messages[0] == {"role": "user", "content": "Hello."}
+    assert messages[1]["role"] == "assistant"
+    # Replayed in the required envelope: in-context schooling for the model's
+    # habit of dropping the "reply" field.
+    assert json.loads(messages[1]["content"]) == {"reply": "Hm. You again."}
+
+
+def test_converse_tier1_splits_static_prefix_from_volatile_user_block(monkeypatch):
+    captured = {}
+
+    def fake_call(**kwargs):
+        captured.update(kwargs)
+        return '{"reply": "Aye.", "mood": "content", "sentiment_delta": 0, "memory": ""}'
+
+    monkeypatch.setattr(conversation, "_call_llm", fake_call)
+    conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "Fine blade.", ["a rumor"])
+    assert captured["history"][0] == {"role": "user", "content": "Hello."}
+    assert "Current mood" in captured["user"]  # volatile block rides the user message
+    assert "a rumor" in captured["user"]
+    assert "Fine blade." in captured["user"]
+    assert "Current mood" not in captured["system"]  # system stays cacheable
 
 
 def test_converse_tier1_parses_llm_output(monkeypatch):

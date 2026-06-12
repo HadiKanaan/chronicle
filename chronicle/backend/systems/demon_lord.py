@@ -251,10 +251,22 @@ def build_decision_prompt(
 ) -> str:
     day = int(state.get("current_day", 1))
     weather = state.get("region", {}).get("current_weather", "clear")
+    actions = ", ".join(ACTION_TYPES)
+    # Static text (identity, profile, contract) leads; volatile state (day,
+    # standings, whispers, past moves) trails - so consecutive dawn calls share
+    # a prompt prefix and Ollama's cache skips re-evaluating the fixed half.
     lines = [
         f"You are {demon.get('name', DEMON_LORD_NAME)}, the Demon Lord whose shadow "
         "lengthens over Aldenmoor, a small medieval river town.",
         STRATEGY_PROFILE,
+        "Each dawn you make ONE strategic move. Respond ONLY with one JSON "
+        'object exactly like this: {"action_type": "<one of: ' + actions + '>", '
+        '"target_faction": "<a faction id from the list below, or empty string>", '
+        '"announcement": "<1-2 dramatic sentences the townsfolk will whisper '
+        'about what happened>", '
+        '"faction_reputation_effects": {"<faction id>": <integer -8..8>}} '
+        "Every key in faction_reputation_effects must be a faction id from the "
+        "list below. Always include all four fields.",
         f"Today is day {day}. The weather is {weather}.",
         "The factions of Aldenmoor - refer to them ONLY by faction id:",
     ]
@@ -271,17 +283,6 @@ def build_decision_prompt(
     if past:
         lines.append("Your recent moves (do not simply repeat them):")
         lines.extend(f"- {entry.get('summary', '')}" for entry in past[-3:])
-    actions = ", ".join(ACTION_TYPES)
-    lines.append(
-        "Choose ONE move for today. Respond ONLY with one JSON object exactly "
-        'like this: {"action_type": "<one of: ' + actions + '>", '
-        '"target_faction": "<a faction id from the list, or empty string>", '
-        '"announcement": "<1-2 dramatic sentences the townsfolk will whisper '
-        'about what happened>", '
-        '"faction_reputation_effects": {"<faction id>": <integer -8..8>}} '
-        "Every key in faction_reputation_effects must be a faction id from the "
-        "list above. Always include all four fields."
-    )
     return "\n".join(lines)
 
 
@@ -298,7 +299,7 @@ def generate_decision(
     for _ in range(2):
         raw = conversation._call_llm(
             system=prompt,
-            user="Decide today's move now.",
+            user="Decide today's move now. Respond ONLY with the JSON object.",
             json_format=True,
             num_predict=DECISION_NUM_PREDICT,
             temperature=0.9,

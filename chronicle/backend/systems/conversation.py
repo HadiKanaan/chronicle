@@ -45,9 +45,9 @@ except Exception:  # noqa: BLE001 - missing client just means stub replies
 # The one swappable model decision (see specs research.md decision 4).
 MODEL = "qwen3:4b"
 OLLAMA_HOST = "http://localhost:11434"
-# Keep the model resident between calls so conversations only pay the ~8s warm
-# cost, never the ~18s cold-load cost.
-KEEP_ALIVE = "30m"
+# Keep the model resident permanently (~3.5 GB RAM): an idle unload costs ~18s
+# of cold reload on the next conversation, the worst possible first impression.
+KEEP_ALIVE = -1
 LLM_TIMEOUT_SECONDS = 120.0
 
 # Conversation replies stay short (1-3 sentences) so num_predict can be tight.
@@ -109,8 +109,15 @@ def _call_llm(
     json_format: bool = True,
     num_predict: int = CONVERSE_NUM_PREDICT,
     temperature: float = 0.8,
+    history: Optional[list[dict[str, str]]] = None,
 ) -> Optional[str]:
-    """One serialized Ollama chat call. Returns the raw text or None on failure."""
+    """One serialized Ollama chat call. Returns the raw text or None on failure.
+
+    history (optional prior chat turns) sits between the system prompt and the
+    user message. Keeping system + history byte-identical across turns lets
+    Ollama's prefix cache skip re-evaluating them - on this CPU-only laptop
+    that is the difference between ~8s and ~70s per call.
+    """
     client = _get_client()
     if client is None:
         return None
@@ -120,6 +127,7 @@ def _call_llm(
                 model=MODEL,
                 messages=[
                     {"role": "system", "content": system},
+                    *(history or []),
                     {"role": "user", "content": user},
                 ],
                 think=False,
@@ -127,6 +135,13 @@ def _call_llm(
                 keep_alive=KEEP_ALIVE,
                 options={"temperature": temperature, "num_predict": num_predict},
             )
+        logger.info(
+            "LLM call: prompt_eval=%s tok / %.1fs, gen=%s tok / %.1fs",
+            getattr(response, "prompt_eval_count", None),
+            (getattr(response, "prompt_eval_duration", 0) or 0) / 1e9,
+            getattr(response, "eval_count", None),
+            (getattr(response, "eval_duration", 0) or 0) / 1e9,
+        )
         return response["message"]["content"]
     except Exception as exc:  # noqa: BLE001 - any transport/model failure -> stub path
         # Surfaced on the uvicorn console so silent stub replies are explainable.
@@ -273,22 +288,16 @@ def sentiment_phrase(sentiment: int) -> str:
     return "hostile"
 
 
-def build_conversation_prompt(
-    npc: dict[str, Any],
-    player_name: str,
-    rumor_texts: Optional[list[str]] = None,
-) -> str:
-    """Assemble the system prompt from the NPC's persistent card.
+def build_character_prompt(npc: dict[str, Any]) -> str:
+    """Static system prompt: the card's identity, flavor, and the JSON contract.
 
-    rumor_texts are the actual texts of rumors the NPC knows (resolved by the
-    caller - this module never touches the database), so dialogue can repeat
-    and react to what is spreading through town (Day 6 / US4).
+    Deliberately excludes everything that changes between exchanges (mood,
+    sentiment, memories, rumors, history) - those travel in
+    build_situation_block - so this prompt stays byte-identical across turns
+    and Ollama's prefix cache can skip re-evaluating it. On this CPU-only
+    laptop that cache is the difference between ~8s and ~70s per call.
     """
     traits = ", ".join(npc.get("personality_traits", [])) or "unremarkable"
-    mood = npc.get("current_mood", "neutral")
-    mood_reason = npc.get("mood_reason", "")
-    sentiment = int(npc.get("player_sentiment", 50))
-
     lines = [
         f"You are roleplaying {npc.get('name', 'a villager')}, a "
         f"{npc.get('age', 30)}-year-old {npc.get('occupation', 'villager')} in "
@@ -307,29 +316,6 @@ def build_conversation_prompt(
         lines.append(f"Old wound: {npc['trauma']}.")
     if npc.get("conversation_style"):
         lines.append(f"How you speak: {npc['conversation_style']}.")
-    lines.append(
-        f"Current mood: {mood}" + (f" ({mood_reason})." if mood_reason else ".")
-    )
-    lines.append(
-        f"You feel {sentiment_phrase(sentiment)} toward {player_name} "
-        f"(sentiment {sentiment}/100)."
-    )
-
-    memories = npc.get("memory_buffer", [])[-5:]
-    if memories:
-        lines.append("Things you remember:")
-        lines.extend(f"- {memory}" for memory in memories)
-
-    history = npc.get("conversation_history", [])[-3:]
-    if history:
-        lines.append(f"Your last exchanges with {player_name}:")
-        for entry in history:
-            lines.append(f"{player_name}: {entry.get('player_text', '')}")
-            lines.append(f"You: {entry.get('npc_response', '')}")
-
-    if rumor_texts:
-        lines.append("Rumors you have heard around town (you may bring them up):")
-        lines.extend(f"- {text}" for text in rumor_texts)
 
     moods = ", ".join(sorted(VALID_MOODS))
     lines.append(
@@ -341,12 +327,68 @@ def build_conversation_prompt(
         '{"reply": "<what you say out loud>", '
         f'"mood": "<your mood now, one of: {moods}>", '
         '"sentiment_delta": <integer -10..10, how this exchange shifted your '
-        f'feeling toward {player_name}>, '
+        "feeling toward the player>, "
         '"memory": "<one short sentence you will remember, or empty>"} '
         'Always include all four fields. "reply" comes FIRST and must never be '
         "empty or missing - an answer without \"reply\" is thrown away unheard."
     )
     return "\n".join(lines)
+
+
+def build_situation_block(
+    npc: dict[str, Any],
+    player_name: str,
+    rumor_texts: Optional[list[str]] = None,
+) -> str:
+    """The volatile half of the prompt: mood, disposition, memories, rumors.
+
+    Rides inside the final user message, AFTER the cached system prompt and
+    history, so a mood shift or a fresh memory never invalidates the prefix
+    cache. rumor_texts are the actual texts of rumors the NPC knows, resolved
+    by the caller - this module never touches the database (Day 6 / US4).
+    """
+    mood = npc.get("current_mood", "neutral")
+    mood_reason = npc.get("mood_reason", "")
+    sentiment = int(npc.get("player_sentiment", 50))
+    lines = [
+        "[What you know right now]",
+        f"Current mood: {mood}" + (f" ({mood_reason})." if mood_reason else "."),
+        f"You feel {sentiment_phrase(sentiment)} toward {player_name} "
+        f"(sentiment {sentiment}/100).",
+    ]
+    memories = npc.get("memory_buffer", [])[-5:]
+    if memories:
+        lines.append("Things you remember:")
+        lines.extend(f"- {memory}" for memory in memories)
+    if rumor_texts:
+        lines.append("Rumors you have heard around town (you may bring them up):")
+        lines.extend(f"- {text}" for text in rumor_texts)
+    return "\n".join(lines)
+
+
+def _history_messages(npc: dict[str, Any]) -> list[dict[str, str]]:
+    """Prior exchanges replayed as native chat turns for the prompt prefix.
+
+    Assistant turns are wrapped back into the {"reply": ...} envelope the
+    model must produce - free in-context schooling against its habit of
+    dropping the field. The full stored history is used (append-only until
+    HISTORY_CAP) rather than a sliding window: a window that slides every
+    turn would shift every message and break the prefix cache each time.
+    """
+    messages: list[dict[str, str]] = []
+    for entry in npc.get("conversation_history", [])[-HISTORY_CAP:]:
+        player_text = entry.get("player_text", "")
+        npc_response = entry.get("npc_response", "")
+        if not player_text or not npc_response:
+            continue
+        messages.append({"role": "user", "content": player_text})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": json.dumps({"reply": npc_response}, ensure_ascii=False),
+            }
+        )
+    return messages
 
 
 def converse_tier1(
@@ -360,18 +402,29 @@ def converse_tier1(
     Returns {"reply", "mood", "sentiment_delta", "memory", "used_llm"} with
     every field already validated and display-safe. When the model drops the
     "reply" field (a frequent qwen3:4b quirk) the call is retried once - cheap
-    (~8s) since the prompt is already warm in the cache; if the retry drops it
-    too, the first attempt's salvaged delta is used.
+    since the prompt is already warm in the cache; if the retry drops it too,
+    the first attempt's salvaged delta is used.
+
+    Prompt shape serves the prefix cache: the static card (system) and stored
+    history (chat turns) are byte-identical between turns, so only the small
+    situation block and the player's new words cost prompt evaluation.
     """
-    system = build_conversation_prompt(npc, player_name, rumor_texts)
+    system = build_character_prompt(npc)
+    history = _history_messages(npc)
+    user = (
+        build_situation_block(npc, player_name, rumor_texts)
+        + f"\n{player_name} says: {player_text}\n"
+        + 'Answer now with the JSON object - "reply" first.'
+    )
     current_mood = npc.get("current_mood", "neutral")
     salvaged: Optional[dict[str, Any]] = None
     for _ in range(2):
         raw = _call_llm(
             system=system,
-            user=player_text,
+            user=user,
             json_format=True,
             num_predict=CONVERSE_NUM_PREDICT,
+            history=history,
         )
         if raw is None:
             break
