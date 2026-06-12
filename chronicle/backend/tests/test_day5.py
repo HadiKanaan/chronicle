@@ -232,6 +232,59 @@ def test_converse_tier1_uses_first_salvage_when_retry_also_drops_reply(monkeypat
     assert result["used_llm"] is True
 
 
+def test_is_parrot_matches_near_identical_lines():
+    assert conversation._is_parrot(
+        "The shadows hunger tonight, Fyra.", "the shadows hunger tonight fyra"
+    ) is True
+    assert conversation._is_parrot("Fine day, friend.", "The shadows hunger tonight.") is False
+    assert conversation._is_parrot("anything", "") is False
+    assert conversation._is_parrot("", "anything") is False
+
+
+def test_converse_tier1_retries_when_model_parrots_its_previous_line(monkeypatch):
+    npc = _tier1_npc(
+        conversation_history=[
+            {"day": 3, "hour": 10, "player_text": "Hello.",
+             "npc_response": "The shadows hunger tonight, Fyra."}
+        ]
+    )
+    responses = iter(
+        [
+            # Observed live: identical line for a different question.
+            '{"reply": "The shadows hunger tonight, Fyra.", "mood": "suspicious", "sentiment_delta": 0, "memory": ""}',
+            '{"reply": "Ask the ferryman, not me.", "mood": "suspicious", "sentiment_delta": 0, "memory": ""}',
+        ]
+    )
+    calls = []
+    monkeypatch.setattr(
+        conversation, "_call_llm", lambda **kwargs: calls.append(kwargs) or next(responses)
+    )
+    result = conversation.converse_tier1(npc, "Fyra", "Why so wary?")
+    assert len(calls) == 2
+    assert result["reply"] == "Ask the ferryman, not me."
+    assert "do NOT reuse the wording" in calls[1]["user"]  # anti-repeat nudge rode the retry
+    assert calls[1]["temperature"] > calls[0]["temperature"]
+
+
+def test_converse_tier1_accepts_repeat_if_retry_parrots_too(monkeypatch):
+    npc = _tier1_npc(
+        conversation_history=[
+            {"day": 3, "hour": 10, "player_text": "Hello.",
+             "npc_response": "The shadows hunger tonight, Fyra."}
+        ]
+    )
+    raw = '{"reply": "The shadows hunger tonight, Fyra.", "mood": "suspicious", "sentiment_delta": 0, "memory": ""}'
+    calls = []
+    monkeypatch.setattr(
+        conversation, "_call_llm", lambda **kwargs: calls.append(1) or raw
+    )
+    result = conversation.converse_tier1(npc, "Fyra", "Why so wary?")
+    assert len(calls) == 2  # exactly one retry, never more
+    # A repeated in-character line still beats a canned stub.
+    assert result["reply"] == "The shadows hunger tonight, Fyra."
+    assert result["used_llm"] is True
+
+
 def test_converse_tier1_single_call_when_reply_is_genuine(monkeypatch):
     raw = '{"reply": "Well met.", "mood": "content", "sentiment_delta": 0, "memory": ""}'
     calls = []

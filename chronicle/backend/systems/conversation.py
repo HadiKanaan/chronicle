@@ -23,6 +23,7 @@ the endpoint never depends on the LLM being up.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import random
@@ -51,8 +52,15 @@ KEEP_ALIVE = -1
 LLM_TIMEOUT_SECONDS = 120.0
 
 # Conversation replies stay short (1-3 sentences) so num_predict can be tight.
-CONVERSE_NUM_PREDICT = 220
+# 260, not 220: a 220-token cap was observed live truncating the JSON envelope
+# mid-string when the model wrote a long reply plus a long memory.
+CONVERSE_NUM_PREDICT = 260
 CARD_GEN_NUM_PREDICT = 300
+
+# A reply this similar to the NPC's previous line counts as parroting and
+# triggers the anti-repeat retry (qwen3:4b habitually copies its own last
+# assistant turn verbatim).
+REPEAT_SIMILARITY = 0.9
 
 # Rolling per-NPC conversation transcript kept on the card for prompt context.
 HISTORY_CAP = 6
@@ -276,6 +284,27 @@ def parse_card_delta(raw: str, current_mood: str) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # Tier 1 conversation
 # --------------------------------------------------------------------------- #
+def _normalize_speech(text: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", "", text.lower())).strip()
+
+
+def _is_parrot(reply: str, previous_reply: str) -> bool:
+    """True when the model recited its previous line instead of answering.
+
+    Observed live (Isolde Vane, day 173-174): qwen3:4b answered three
+    different questions with one identical sentence - real LLM output that
+    reads exactly like a canned fallback to the player.
+    """
+    if not reply or not previous_reply:
+        return False
+    a, b = _normalize_speech(reply), _normalize_speech(previous_reply)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return difflib.SequenceMatcher(None, a, b).ratio() >= REPEAT_SIMILARITY
+
+
 def sentiment_phrase(sentiment: int) -> str:
     if sentiment >= 75:
         return "warm and trusting"
@@ -400,10 +429,12 @@ def converse_tier1(
     """One LLM conversation turn. Falls back to a stub if Ollama is down.
 
     Returns {"reply", "mood", "sentiment_delta", "memory", "used_llm"} with
-    every field already validated and display-safe. When the model drops the
-    "reply" field (a frequent qwen3:4b quirk) the call is retried once - cheap
-    since the prompt is already warm in the cache; if the retry drops it too,
-    the first attempt's salvaged delta is used.
+    every field already validated and display-safe. The call is retried once
+    (cheap - the prompt prefix is warm in the cache) when the model either
+    drops the "reply" field or parrots its previous line verbatim; the retry
+    carries an explicit anti-repeat nudge and a higher temperature. If the
+    retry misbehaves too, the first attempt's delta is used - a repeated or
+    salvaged line still beats a canned stub.
 
     Prompt shape serves the prefix cache: the static card (system) and stored
     history (chat turns) are byte-identical between turns, so only the small
@@ -411,32 +442,42 @@ def converse_tier1(
     """
     system = build_character_prompt(npc)
     history = _history_messages(npc)
-    user = (
+    base_user = (
         build_situation_block(npc, player_name, rumor_texts)
         + f"\n{player_name} says: {player_text}\n"
         + 'Answer now with the JSON object - "reply" first.'
     )
     current_mood = npc.get("current_mood", "neutral")
-    salvaged: Optional[dict[str, Any]] = None
-    for _ in range(2):
+    stored_history = npc.get("conversation_history") or []
+    previous_reply = stored_history[-1].get("npc_response", "") if stored_history else ""
+
+    fallback: Optional[dict[str, Any]] = None
+    nudge = ""
+    for attempt in range(2):
         raw = _call_llm(
             system=system,
-            user=user,
+            user=base_user + nudge,
             json_format=True,
             num_predict=CONVERSE_NUM_PREDICT,
+            temperature=0.8 if attempt == 0 else 0.95,
             history=history,
         )
         if raw is None:
             break
         delta = parse_card_delta(raw, current_mood)
-        if delta.pop("reply_was_genuine", True):
+        genuine = delta.pop("reply_was_genuine", True)
+        if genuine and not _is_parrot(delta["reply"], previous_reply):
             delta["used_llm"] = True
             return delta
-        if salvaged is None:
-            salvaged = delta
-    if salvaged is not None:
-        salvaged["used_llm"] = True
-        return salvaged
+        if fallback is None:
+            fallback = delta
+        nudge = (
+            "\nIMPORTANT: do NOT reuse the wording of your previous replies - "
+            "say something new that answers these exact words."
+        )
+    if fallback is not None:
+        fallback["used_llm"] = True
+        return fallback
     result = stub_converse(npc)
     result["used_llm"] = False
     return result
