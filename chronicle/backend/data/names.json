@@ -6,5 +6,8 @@
   "occupations_tier3": ["laborer", "peasant", "child", "elder", "wanderer"],
   "personality_traits": ["pragmatic", "curious", "suspicious", "generous", "greedy", "loyal", "cowardly", "brave", "resentful", "cheerful", "melancholic", "ambitious", "cautious", "reckless"],
   "dark_traits": ["willing to betray allies for profit", "hoards information as leverage", "cruel to those weaker than them", "secretly collaborates with criminal elements"],
-  "redeeming_qualities": ["fiercely protective of family", "genuinely kind to strangers in need", "keeps every promise once made", "donates anonymously to the poor"]
+  "redeeming_qualities": ["fiercely protective of family", "genuinely kind to strangers in need", "keeps every promise once made", "donates anonymously to the poor"],
+  "country_names": ["Velmoria", "Karsh Dominion", "Eltharin", "Sundermark", "Thornavale", "Caldris", "Brackenholt", "Ossiander", "Veyrmoor", "Halvenreach", "Drennys", "Wystmark", "Aurelan", "Greywater Pact", "Norvane", "Suldheim"],
+  "country_capitals": ["Highspire", "Karsh", "Eltis", "Sunder", "Thornkeep", "Caldhaven", "Bracken", "Ossgate", "Veyrport", "Halven", "Drenholt", "Wyst", "Aurel", "Greyford", "Norhold", "Suld"],
+  "poi_names": ["the Sunken Spire", "Ashfall Ruins", "the Weeping Quarry", "Old Garrowmoor", "the Glass Barrows", "Stormwatch Tower", "the Forgotten Ford", "Kelp Cairn"]
 }

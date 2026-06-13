@@ -57,6 +57,9 @@ class WorldState(BaseModel):
     # Day 6: rolling record of the Demon Lord's dawn decisions
     # ({day, action_type, summary} entries, newest last, capped).
     demon_lord_decisions: list[dict] = Field(default_factory=list)
+    # Day 7: persisted fog-of-war exploration set ("x,y" keys for every tile the
+    # player has ever seen). Survives restarts; grows as the host NPC walks.
+    explored_tiles: list[str] = Field(default_factory=list)
 
 
 class RenderPayload(BaseModel):

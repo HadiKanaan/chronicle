@@ -41,6 +41,26 @@ def init_db() -> None:
             )
             """
         )
+        # Day 7: the immutable tile grid + buildings live here, written once at
+        # generation, so the hourly world-state save stops rewriting the 48x48
+        # blob every game hour (tiles never change post-gen).
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS region_static (
+                id INTEGER PRIMARY KEY,
+                data TEXT NOT NULL
+            )
+            """
+        )
+        # Day 7: the visual-only continent map, generated once and cached.
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS continent (
+                id INTEGER PRIMARY KEY,
+                data TEXT NOT NULL
+            )
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS npcs (
@@ -91,6 +111,31 @@ def init_db() -> None:
         )
 
 
+# Region fields that never change after generation. Persisted once in
+# region_static and merged back on read, so the hot world-state blob stays lean.
+_STATIC_REGION_FIELDS = ("tiles", "buildings")
+
+
+def get_region_static() -> Optional[dict[str, Any]]:
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT data FROM region_static WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return _loads(row["data"])
+
+
+def save_region_static(region: dict[str, Any]) -> None:
+    """Persist the immutable region grid (tiles + buildings) exactly once."""
+    static = {field: region.get(field) for field in _STATIC_REGION_FIELDS}
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO region_static (id, data) VALUES (1, ?)",
+            (_dumps(static),),
+        )
+
+
 def get_world_state() -> Optional[dict[str, Any]]:
     with _connect() as connection:
         row = connection.execute(
@@ -98,14 +143,33 @@ def get_world_state() -> Optional[dict[str, Any]]:
         ).fetchone()
         if row is None:
             return None
-        return _loads(row["data"])
+        state = _loads(row["data"])
+    # Merge the immutable tile grid back onto the region so every caller still
+    # sees a fully-populated state["region"]["tiles"].
+    region = state.get("region")
+    if isinstance(region, dict):
+        static = get_region_static()
+        if static:
+            for field in _STATIC_REGION_FIELDS:
+                if static.get(field) is not None:
+                    region[field] = static[field]
+    return state
 
 
 def save_world_state(world_state: dict[str, Any]) -> None:
+    region = world_state.get("region")
+    blob = world_state
+    if isinstance(region, dict):
+        # First save (or a legacy world with tiles embedded): persist the static
+        # grid once. Thereafter the hourly save writes only the mutable fields.
+        if get_region_static() is None and any(region.get(f) for f in _STATIC_REGION_FIELDS):
+            save_region_static(region)
+        lean_region = {k: v for k, v in region.items() if k not in _STATIC_REGION_FIELDS}
+        blob = {**world_state, "region": lean_region}
     with _connect() as connection:
         connection.execute(
             "INSERT OR REPLACE INTO world_state (id, data) VALUES (1, ?)",
-            (_dumps(world_state),),
+            (_dumps(blob),),
         )
 
 
@@ -117,7 +181,10 @@ def world_is_generated() -> bool:
 def clear_world() -> None:
     """Remove all generated world data so a fresh world can be written."""
     with _connect() as connection:
-        for table in ("world_state", "npcs", "factions", "faction_relationships", "rumors"):
+        for table in (
+            "world_state", "region_static", "npcs", "factions",
+            "faction_relationships", "rumors",
+        ):
             connection.execute(f"DELETE FROM {table}")
 
 
@@ -287,6 +354,26 @@ def add_rumor_knowledge(rumor_id: str, npc_ids: list[str]) -> None:
         if npc_id not in known:
             known.append(npc_id)
     save_rumor(rumor)
+
+
+def get_continent() -> Optional[dict[str, Any]]:
+    """The cached visual-only continent map, or None if not generated yet."""
+    with _connect() as connection:
+        row = connection.execute(
+            "SELECT data FROM continent WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return _loads(row["data"])
+
+
+def save_continent(data: dict[str, Any]) -> None:
+    """Persist the continent map once; it is independent of the playable region."""
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO continent (id, data) VALUES (1, ?)",
+            (_dumps(data),),
+        )
 
 
 def log_event(day: int, hour: int, event_type: str, description: str) -> None:

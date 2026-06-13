@@ -21,12 +21,14 @@ from typing import Any, Optional
 try:  # pragma: no cover - exercised by environment, not unit tests
     import numpy as np
     from sklearn.cluster import KMeans
+    from sklearn.ensemble import RandomForestRegressor
     from sklearn.tree import DecisionTreeClassifier
 
     _ML_AVAILABLE = True
 except Exception:  # noqa: BLE001 - any import failure means we use fallbacks
     np = None  # type: ignore[assignment]
     KMeans = None  # type: ignore[assignment]
+    RandomForestRegressor = None  # type: ignore[assignment]
     DecisionTreeClassifier = None  # type: ignore[assignment]
     _ML_AVAILABLE = False
 
@@ -413,3 +415,96 @@ def predict_conversation_mood(valence_now: float, event_valence: float) -> str:
         _conversation_mood_model = train_mood_model()
         _conversation_mood_trained = True
     return predict_mood(_conversation_mood_model, valence_now, event_valence, 0.0, 0.5)
+
+
+# --------------------------------------------------------------------------- #
+# Country property generator (Day 7) - correlated nation stats for the
+# continent overlay's tooltips.
+# --------------------------------------------------------------------------- #
+# A nation's stats are not independent: naval power needs a coastline, timber
+# needs a wet (non-arid) climate, mineral wealth tracks elevation, and so on.
+# We fit a multi-output regressor on synthetic nations whose stats are produced
+# by these correlated rules, then HARD-enforce the impossible cases after
+# prediction (a landlocked nation has zero navy; an arid nation has no timber)
+# so the tooltips are never self-contradictory.
+COUNTRY_STAT_LABELS = ["naval_power", "timber", "agriculture", "mineral_wealth", "military", "population"]
+
+# Country feature vector: (is_coastal 0/1, aridity, mean_elevation, size, forest_factor),
+# each non-categorical value in [0, 1].
+_COUNTRY_ARID_TIMBER_CUTOFF = 0.65
+
+
+def _country_stat_rule(
+    coastal: float,
+    aridity: float,
+    elevation: float,
+    size: float,
+    forest: float,
+) -> list[float]:
+    """Ground-truth correlated stats (no noise), each clamped to [0, 100]."""
+    moisture = 1.0 - aridity
+    naval = (40.0 + 55.0 * moisture + 25.0 * size) if coastal >= 0.5 else 0.0
+    timber = 15.0 + 75.0 * forest * moisture
+    agriculture = 10.0 + 80.0 * moisture * (1.0 - elevation)
+    mineral = 25.0 + 65.0 * elevation
+    population = 0.7 * agriculture + 40.0 * size
+    military = 0.4 * population + 45.0 * size + 20.0 * aridity
+    return [max(0.0, min(100.0, v)) for v in (naval, timber, agriculture, mineral, military, population)]
+
+
+def train_country_property_model(seed: int = 41) -> Optional[Any]:
+    """Fit a multi-output regressor mapping nation features to correlated stats.
+
+    Returns the fitted RandomForestRegressor, or None if scikit-learn is
+    unavailable (callers then use the deterministic rule directly).
+    """
+    if not _ML_AVAILABLE:
+        return None
+
+    rng = np.random.RandomState(seed)
+    n = 1500
+    coastal = rng.randint(0, 2, size=n).astype(float)
+    aridity = rng.rand(n)
+    elevation = rng.rand(n)
+    size = rng.rand(n)
+    forest = rng.rand(n)
+    features = np.column_stack([coastal, aridity, elevation, size, forest])
+    labels = np.array(
+        [_country_stat_rule(coastal[i], aridity[i], elevation[i], size[i], forest[i]) for i in range(n)]
+    )
+    labels = labels + rng.normal(0.0, 4.0, size=labels.shape)
+
+    model = RandomForestRegressor(n_estimators=40, max_depth=8, random_state=seed)
+    model.fit(features, labels)
+    return model
+
+
+def generate_country_properties(
+    country_model: Optional[Any],
+    coastal: bool,
+    aridity: float,
+    elevation: float,
+    size: float,
+    forest: float,
+) -> dict[str, int]:
+    """Produce one nation's correlated stats, with impossible cases zeroed.
+
+    The model proposes; hard constraints enforce correctness: a landlocked
+    nation can have no naval power, and an arid nation no timber.
+    """
+    coastal_f = 1.0 if coastal else 0.0
+    if country_model is None or not _ML_AVAILABLE:
+        raw = _country_stat_rule(coastal_f, aridity, elevation, size, forest)
+    else:
+        raw = country_model.predict(
+            np.array([[coastal_f, aridity, elevation, size, forest]])
+        )[0]
+    values = {
+        label: int(round(max(0.0, min(100.0, float(value)))))
+        for label, value in zip(COUNTRY_STAT_LABELS, raw)
+    }
+    if not coastal:
+        values["naval_power"] = 0
+    if aridity >= _COUNTRY_ARID_TIMBER_CUTOFF:
+        values["timber"] = min(values["timber"], 5)
+    return values

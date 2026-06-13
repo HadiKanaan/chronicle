@@ -19,12 +19,14 @@ from database import (
     get_active_rumors,
     get_all_factions,
     get_all_npcs,
+    get_continent,
     get_npc,
     get_npcs_by_tier,
     get_recent_log,
     get_world_state,
     init_db,
     log_event,
+    save_continent,
     save_npc,
     save_npcs,
     save_rumor,
@@ -32,7 +34,7 @@ from database import (
     world_is_generated,
 )
 from models.world import RenderPayload, WorldState
-from systems import behavior, conversation, demon_lord, rumors, weather, world_gen
+from systems import behavior, continent, conversation, demon_lord, rumors, weather, world_gen
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -59,6 +61,15 @@ REAL_SECONDS_PER_MOVE_STEP = 1.0
 MOVE_STEPS_PER_HOUR = max(1, int(REAL_SECONDS_PER_GAME_HOUR / REAL_SECONDS_PER_MOVE_STEP))
 
 _tick_rng = random.Random()
+
+# Day 7 fog of war: tiles within this Euclidean radius of the player host NPC
+# are 'visible' right now; tiles seen before are 'explored' (dimmed); the rest
+# are 'unexplored' (black). The radius is deliberately generous so the town
+# still reads as a living place, while the Demon Lord's NE-corner lair stays
+# dark until the player walks out to it.
+FOG_REVEAL_RADIUS = 11.0
+# Debug demo toggle (press 'R'): reveal the whole map regardless of exploration.
+_reveal_all = False
 
 # Serializes simulation writes. The tick functions load-mutate-save NPC dicts
 # on a worker thread; any other writer that touches simulated NPC state (the
@@ -383,6 +394,22 @@ async def lifespan(_app: FastAPI):
     finally:
         if tick_task is not None:
             tick_task.cancel()
+        # Day 7 (T040): clean shutdown flush. Acquire the simulation lock so any
+        # in-flight tick finishes its read-modify-write first, then persist the
+        # last committed world state explicitly - the final tick can never be
+        # lost to an abrupt stop.
+        try:
+            with _sim_lock:
+                final_state = get_world_state()
+                if final_state is not None:
+                    save_world_state(final_state)
+                    log_event(
+                        int(final_state.get("current_day", 1)),
+                        int(final_state.get("current_hour", 6)),
+                        "shutdown", "World state flushed on shutdown.",
+                    )
+        except Exception as exc:  # noqa: BLE001 - shutdown must not raise
+            logging.getLogger("chronicle").warning("Shutdown flush failed: %s", exc)
 
 
 app = FastAPI(title="Chronicle of the Velvet Lies API", lifespan=lifespan)
@@ -442,6 +469,65 @@ def _apply_move(direction: str) -> bool:
     npc["y"] = float(target_y)
     save_npc(npc)
     return True
+
+
+def _visible_tile_keys(region: dict[str, Any], cx: float, cy: float) -> set[str]:
+    """The "x,y" keys of every in-bounds tile within FOG_REVEAL_RADIUS of (cx, cy)."""
+    width = int(region.get("width", 0))
+    height = int(region.get("height", 0))
+    radius = int(FOG_REVEAL_RADIUS)
+    cxi, cyi = int(round(cx)), int(round(cy))
+    keys: set[str] = set()
+    for y in range(max(0, cyi - radius), min(height, cyi + radius + 1)):
+        for x in range(max(0, cxi - radius), min(width, cxi + radius + 1)):
+            if (x - cx) ** 2 + (y - cy) ** 2 <= FOG_REVEAL_RADIUS ** 2:
+                keys.add(f"{x},{y}")
+    return keys
+
+
+def _build_fog_map(
+    state: dict[str, Any],
+    region: dict[str, Any],
+    host: Optional[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Compute the three-tier fog map from the host NPC's current position.
+
+    Backend stays authoritative: every non-'visible' tile is emitted with its
+    tier ('explored' or 'unexplored') so the frontend only paints what it is
+    told. Visible tiles are omitted (the frontend treats absent tiles as full
+    brightness), keeping the per-poll payload lean. Newly visible tiles are
+    folded into the persisted exploration set under _sim_lock so the discovery
+    survives restarts; the write happens at most once per move, not per poll.
+    """
+    if _reveal_all or host is None:
+        return []  # whole map reads as visible
+
+    width = int(region.get("width", 0))
+    height = int(region.get("height", 0))
+    explored = set(state.get("explored_tiles", []))
+    visible = _visible_tile_keys(region, float(host.get("x", 0)), float(host.get("y", 0)))
+
+    newly_seen = visible - explored
+    if newly_seen:
+        # Persist the discovery. Re-fetch inside the lock because the tick may
+        # have advanced the clock since this payload build started.
+        with _sim_lock:
+            fresh = get_world_state()
+            if fresh is not None:
+                merged = set(fresh.get("explored_tiles", [])) | visible
+                fresh["explored_tiles"] = sorted(merged)
+                save_world_state(fresh)
+        explored |= visible
+
+    fog_map: list[dict[str, Any]] = []
+    for y in range(height):
+        for x in range(width):
+            key = f"{x},{y}"
+            if key in visible:
+                continue  # visible: omitted, frontend paints at full brightness
+            tier = "explored" if key in explored else "unexplored"
+            fog_map.append({"x": x, "y": y, "fog_tier": tier})
+    return fog_map
 
 
 def _empty_render_payload() -> RenderPayload:
@@ -519,7 +605,12 @@ def _build_render_payload() -> RenderPayload:
     }
     notifications = [entry["description"] for entry in get_recent_log(limit=5)]
 
-    fog_map = world_state_data.get("fog_map", []) if isinstance(world_state_data, dict) else []
+    # Day 7 fog of war: computed backend-side from the host NPC's position.
+    host = next(
+        (npc for npc in all_npcs if npc.get("id") == world_state.player_npc_id),
+        None,
+    )
+    fog_map = _build_fog_map(world_state_data, world_state_data.get("region", {}), host)
 
     # Day 6: display-ready strings only - the newest whispers and the Demon
     # Lord's recent moves, newest first. Raw rumor/decision dicts stay backend.
@@ -574,6 +665,12 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
     if player_input.type == "dialogue_close":
         _clear_dialogue_freeze()
         return JSONResponse({"status": "ok", "accepted": True})
+
+    # Day 7 demo toggle: flip the fog-of-war reveal-all debug flag.
+    if player_input.type == "toggle_reveal":
+        global _reveal_all
+        _reveal_all = not _reveal_all
+        return JSONResponse({"status": "ok", "accepted": True, "reveal_all": _reveal_all})
 
     log_event(1, 6, player_input.type, f"Input received: {player_input.type}")
     return JSONResponse({"status": "ok", "accepted": True})
@@ -714,6 +811,22 @@ def generate_world() -> JSONResponse:
     summary = world_gen.generate_world()
     _ensure_demon_lord()
     return JSONResponse({"status": "generated", **summary})
+
+
+@app.get("/api/continent")
+def get_continent_map() -> JSONResponse:
+    """The visual-only continent overlay. Generated once and cached; the
+    frontend fetches this exactly once (never in the 500ms poll). The continent
+    is purely graphical - only Aldenmoor is deeply simulated."""
+    cached = get_continent()
+    if cached is None:
+        cached = continent.generate_continent()
+        save_continent(cached)
+        log_event(
+            1, 6, "continent",
+            f"Continent map generated: {len(cached.get('countries', []))} countries.",
+        )
+    return JSONResponse(cached)
 
 
 @app.get("/api/npcs")

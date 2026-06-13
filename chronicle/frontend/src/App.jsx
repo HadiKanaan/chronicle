@@ -3,6 +3,7 @@ import { getState, getConversationContext, sendConversation, sendInput } from '.
 import GameCanvas from './GameCanvas';
 import DialogueBox from './DialogueBox';
 import HUD from './HUD';
+import ContinentOverlay from './ContinentOverlay';
 
 const EMPTY_STATE = {
   tiles: [],
@@ -24,6 +25,9 @@ export default function App() {
   // conversation outcome; this just holds the open panel's transcript.
   const [dialogue, setDialogue] = useState(null);
   const [notifications, setNotifications] = useState([]);
+  // Continent map overlay (press M). Purely a UI panel; the data is fetched
+  // once by the overlay component, never in the state poll.
+  const [showContinent, setShowContinent] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +71,23 @@ export default function App() {
     }, 60000);
     return () => window.clearInterval(heartbeatId);
   }, [dialogueOpen]);
+
+  // Press M to toggle the continent map overlay (ignored while typing in the
+  // dialogue input so it never eats a letter mid-sentence).
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const tag = event.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (event.key === 'm' || event.key === 'M') {
+        event.preventDefault();
+        setShowContinent((open) => !open);
+      } else if (event.key === 'Escape') {
+        setShowContinent(false);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const openDialogue = async (npc) => {
     // Tell the backend the dialogue window is open: the world clock freezes
@@ -166,8 +187,10 @@ export default function App() {
       </div>
       <div style={styles.sidebar}>
         <HUD gameState={visibleState} />
+        <div style={styles.hint}>Press M for the continent map · R toggles fog</div>
       </div>
       <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={closeDialogue} />
+      {showContinent ? <ContinentOverlay onClose={() => setShowContinent(false)} /> : null}
     </div>
   );
 }
@@ -188,5 +211,11 @@ const styles = {
   },
   sidebar: {
     minHeight: '0'
+  },
+  hint: {
+    marginTop: '12px',
+    color: '#6b7280',
+    fontSize: '12px',
+    textAlign: 'center'
   }
 };

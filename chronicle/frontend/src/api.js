@@ -60,6 +60,16 @@ export async function sendConversation(npcId, playerText) {
   return response.json();
 }
 
+// Fetched exactly ONCE when the player opens the map overlay - never in the
+// 500ms state poll. The continent is generated once and cached by the backend.
+export async function getContinent() {
+  const response = await fetch('/api/continent');
+  if (!response.ok) {
+    throw new Error(`Failed to load continent: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function getLog() {
   const response = await fetch('/api/log');
   if (!response.ok) {

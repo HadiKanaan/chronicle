@@ -114,6 +114,14 @@ export default function GameCanvas({ gameState, onNpcClick }) {
       tileMap.set(`${tile.x},${tile.y}`, tile.tile_type);
     }
 
+    // Fog of war: the backend is authoritative. fog_map lists only non-visible
+    // tiles ('explored' = dimmed, 'unexplored' = black); any tile absent from
+    // it is fully visible. The frontend just paints what it is told.
+    const fogMap = new Map();
+    for (const cell of gameState.fog_map ?? []) {
+      fogMap.set(`${cell.x},${cell.y}`, cell.fog_tier);
+    }
+
     // Only draw the tiles inside the viewport (plus a one-tile margin).
     const startCol = Math.max(0, Math.floor(camX / DISPLAY_TILE));
     const startRow = Math.max(0, Math.floor(camY / DISPLAY_TILE));
@@ -130,14 +138,33 @@ export default function GameCanvas({ gameState, onNpcClick }) {
       }
     }
 
-    // Characters: draw back-to-front so nearer ones overlap farther ones.
-    const characters = [...(gameState.npcs ?? [])];
+    // Characters: draw back-to-front so nearer ones overlap farther ones. NPCs
+    // standing on a fogged (non-visible) tile are hidden - you only see who is
+    // within your sight radius. The player host is always drawn.
+    const characters = (gameState.npcs ?? []).filter(
+      (npc) => !fogMap.has(`${Math.round(npc.x)},${Math.round(npc.y)}`)
+    );
     if (gameState.player) {
       characters.push({ ...gameState.player, isPlayer: true });
     }
     characters.sort((a, b) => a.y - b.y);
     for (const character of characters) {
       drawCharacter(ctx, images, character, camX, camY);
+    }
+
+    // Fog overlays painted on top: explored tiles get a dim wash, unexplored
+    // tiles go solid black. Drawn after characters so the fog also dims them.
+    if (fogMap.size > 0) {
+      for (let ty = startRow; ty <= endRow; ty += 1) {
+        for (let tx = startCol; tx <= endCol; tx += 1) {
+          const tier = fogMap.get(`${tx},${ty}`);
+          if (!tier) continue;
+          const screenX = Math.round(tx * DISPLAY_TILE - camX);
+          const screenY = Math.round(ty * DISPLAY_TILE - camY);
+          ctx.fillStyle = tier === 'unexplored' ? '#05070b' : 'rgba(5, 7, 11, 0.55)';
+          ctx.fillRect(screenX, screenY, DISPLAY_TILE, DISPLAY_TILE);
+        }
+      }
     }
 
     // Day/night wash over the whole scene.
@@ -159,6 +186,12 @@ export default function GameCanvas({ gameState, onNpcClick }) {
         ArrowLeft: 'left',
         ArrowRight: 'right',
       };
+      // Debug demo toggle: 'r' reveals the whole map (fog on/off) backend-side.
+      if (event.key === 'r' || event.key === 'R') {
+        event.preventDefault();
+        sendInput({ type: 'toggle_reveal', payload: {} }).catch(() => {});
+        return;
+      }
       const direction = directionMap[event.key];
       if (!direction) return;
       event.preventDefault();
