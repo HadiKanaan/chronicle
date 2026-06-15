@@ -27,6 +27,7 @@ from database import (
     init_db,
     log_event,
     save_continent,
+    save_faction,
     save_npc,
     save_npcs,
     save_rumor,
@@ -34,7 +35,16 @@ from database import (
     world_is_generated,
 )
 from models.world import RenderPayload, WorldState
-from systems import behavior, continent, conversation, demon_lord, rumors, weather, world_gen
+from systems import (
+    behavior,
+    continent,
+    conversation,
+    demon_lord,
+    factions,
+    rumors,
+    weather,
+    world_gen,
+)
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -153,6 +163,12 @@ def _advance_one_hour_locked() -> Optional[int]:
             f"Dawn of day {day}: {daily['mood_changes']} moods shifted, "
             f"weather {state['region']['current_weather']}.",
         )
+
+        # Day 7: faction morale eases from its members' moods toward baseline -
+        # the restoring force that heals Demon-Lord damage over time instead of
+        # letting it ratchet to 0. Faction-level write, so it rides _sim_lock.
+        for faction in factions.update_morale_daily(get_all_factions(), npcs):
+            save_faction(faction)
 
     hourly = behavior.update_hourly(state, npcs, _tick_rng)
     _collect(hourly["changed"])
@@ -540,6 +556,7 @@ def _empty_render_payload() -> RenderPayload:
         dialogue=None,
         notifications=[],
         faction_reputations={},
+        faction_morale={},
         current_day=1,
         current_hour=6,
         fog_map=[],
@@ -599,10 +616,11 @@ def _build_render_payload() -> RenderPayload:
         for row in region.tiles
         for tile in row
     ]
-    faction_reputations = {
-        faction["name"]: faction.get("player_reputation", 50)
-        for faction in get_all_factions()
-    }
+    all_factions = get_all_factions()
+    # Day 7: reputation now means the faction's regard for the PLAYER (player-
+    # driven); morale is its own cohesion/wellbeing (what the Demon Lord erodes).
+    faction_reputations = {f["name"]: f.get("player_reputation", 50) for f in all_factions}
+    faction_morale = {f["name"]: f.get("morale", 60) for f in all_factions}
     notifications = [entry["description"] for entry in get_recent_log(limit=5)]
 
     # Day 7 fog of war: computed backend-side from the host NPC's position.
@@ -636,6 +654,7 @@ def _build_render_payload() -> RenderPayload:
         dialogue=world_state_data.get("dialogue") if isinstance(world_state_data, dict) else None,
         notifications=notifications,
         faction_reputations=faction_reputations,
+        faction_morale=faction_morale,
         current_day=world_state.current_day,
         current_hour=world_state.current_hour,
         fog_map=fog_map,

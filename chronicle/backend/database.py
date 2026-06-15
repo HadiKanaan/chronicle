@@ -286,6 +286,37 @@ def adjust_faction_reputation(faction_id: str, delta: int) -> Optional[int]:
     return score
 
 
+def adjust_faction_morale(faction_id: str, delta: int) -> Optional[int]:
+    """Shift a faction's morale by delta, clamped to 0..100.
+
+    Returns the new morale, or None for an unknown faction. Day 7: the Demon
+    Lord's pressure lands here (not player_reputation); a dawn drift restores it
+    toward baseline so damage heals instead of ratcheting to 0.
+    """
+    faction = get_faction(faction_id)
+    if faction is None:
+        return None
+    score = max(0, min(100, int(faction.get("morale", 60)) + int(delta)))
+    faction["morale"] = score
+    save_faction(faction)
+    return score
+
+
+FACTION_HISTORY_CAP = 8
+
+
+def append_faction_history(faction_id: str, day: int, text: str) -> None:
+    """Append a {day, text} line to a faction's rolling narrative log (capped)."""
+    faction = get_faction(faction_id)
+    if faction is None:
+        return
+    history = faction.setdefault("history", [])
+    history.append({"day": int(day), "text": text})
+    if len(history) > FACTION_HISTORY_CAP:
+        del history[: len(history) - FACTION_HISTORY_CAP]
+    save_faction(faction)
+
+
 def get_all_factions() -> list[dict[str, Any]]:
     with _connect() as connection:
         rows = connection.execute("SELECT data FROM factions ORDER BY id ASC").fetchall()

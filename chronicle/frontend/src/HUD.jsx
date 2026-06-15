@@ -5,6 +5,7 @@ function formatHour(hour) {
 
 export default function HUD({ gameState }) {
   const factionEntries = Object.entries(gameState.faction_reputations ?? {});
+  const factionMorale = gameState.faction_morale ?? {};
   const recentNotifications = (gameState.notifications ?? []).slice(-3);
   const player = gameState.player;
   // Display-ready strings straight from the backend payload (Day 6).
@@ -32,17 +33,23 @@ export default function HUD({ gameState }) {
       ) : null}
 
       <section style={styles.section}>
-        <h2 style={styles.heading}>Faction Reputation</h2>
+        <h2 style={styles.heading}>Factions</h2>
         {factionEntries.length === 0 ? (
           <div style={styles.muted}>No factions yet.</div>
         ) : (
           factionEntries.map(([name, score]) => (
             <div key={name} style={styles.row}>
               <span>{name}</span>
-              <span>{score}</span>
+              <span>
+                {score}
+                {name in factionMorale ? (
+                  <span style={styles.muted}> · morale {factionMorale[name]}</span>
+                ) : null}
+              </span>
             </div>
           ))
         )}
+        <div style={styles.legend}>standing toward you · faction morale</div>
       </section>
 
       <section style={styles.section}>
@@ -125,6 +132,11 @@ const styles = {
   },
   muted: {
     color: '#9ca3af'
+  },
+  legend: {
+    color: '#6b7280',
+    fontSize: '11px',
+    marginTop: '6px'
   },
   paused: {
     color: '#8ab4f8'

@@ -371,8 +371,11 @@ def test_apply_decision_writes_all_effects(temp_db):
 
     result = demon_lord.apply_decision(decision, day=9)
 
-    # Faction standing shifted and clamped within bounds.
-    assert temp_db.get_faction("faction_watch")["player_reputation"] == 44
+    # Day 7: the Demon Lord now erodes faction MORALE (60 - 6), and leaves the
+    # town's regard for the player (player_reputation) untouched.
+    assert temp_db.get_faction("faction_watch")["morale"] == 54
+    assert temp_db.get_faction("faction_watch")["player_reputation"] == 50
+    assert any("Demon Lord" in h["text"] for h in temp_db.get_faction("faction_watch")["history"])
     # The reserved suspicious mood entered through the story event.
     suspicious = [n for n in temp_db.get_all_npcs() if n["current_mood"] == "suspicious"]
     assert {"Watcher One", "Watcher Two"} == {n["name"] for n in suspicious}
@@ -528,7 +531,9 @@ def test_run_demon_lord_day_decides_once_per_day(temp_db, monkeypatch):
     assert len(calls) == 1
     state = temp_db.get_world_state()
     assert [d["day"] for d in state["demon_lord_decisions"]] == [9]
-    assert temp_db.get_faction("faction_commons")["player_reputation"] == 46
+    # Day 7: the decision's effect lands on morale (60 - 4), not player reputation.
+    assert temp_db.get_faction("faction_commons")["morale"] == 56
+    assert temp_db.get_faction("faction_commons")["player_reputation"] == 50
 
 
 def test_dawn_tick_triggers_demon_lord_only_when_present(temp_db, monkeypatch):

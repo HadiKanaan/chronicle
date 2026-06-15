@@ -351,8 +351,22 @@ def apply_decision(decision: dict[str, Any], day: int) -> dict[str, Any]:
     action = decision["action_type"]
     announcement = decision["announcement"]
 
+    # Day 7: the Demon Lord erodes faction MORALE (cohesion/wellbeing), not the
+    # town's regard for the player. player_reputation is now purely player-driven
+    # (the Player Reputation Scorer). Each hit also lands in the faction history.
+    hit_factions = 0
     for faction_id, delta in decision.get("faction_reputation_effects", {}).items():
-        database.adjust_faction_reputation(faction_id, delta)
+        if database.adjust_faction_morale(faction_id, delta) is not None:
+            database.append_faction_history(
+                faction_id, day, f"struck by the Demon Lord's {ACTION_PHRASES[action]}"
+            )
+            hit_factions += 1
+    if hit_factions:
+        database.log_event(
+            day, 6, "faction",
+            f"Morale falters in {hit_factions} faction(s) after the Demon Lord's "
+            f"{ACTION_PHRASES[action]}.",
+        )
 
     npcs = database.get_all_npcs()
     mood, victim_count = ACTION_MOODS[action]

@@ -71,6 +71,8 @@ class RenderPayload(BaseModel):
     dialogue: Optional[dict] = None
     notifications: list[str] = Field(default_factory=list)
     faction_reputations: dict[str, int] = Field(default_factory=dict)
+    # Day 7: faction cohesion/wellbeing, distinct from player_reputation.
+    faction_morale: dict[str, int] = Field(default_factory=dict)
     current_day: int = 1
     current_hour: int = 6
     fog_map: list[dict] = Field(default_factory=list)
