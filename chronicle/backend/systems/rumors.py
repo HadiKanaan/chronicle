@@ -17,7 +17,9 @@ rumor_knowledge list (the latter feeds rumor-aware dialogue prompts).
 from __future__ import annotations
 
 import random
-from typing import Any
+from typing import Any, Optional
+
+from ml import train as ml
 
 # A rumor retires when it can no longer spread or has gone stale.
 MIN_PROPAGATION_RATE = 0.02
@@ -57,11 +59,70 @@ def _gossip_propensity(npc: dict[str, Any]) -> float:
 
 
 def gossip_chance(teller: dict[str, Any], rumor: dict[str, Any]) -> float:
-    """Probability the teller passes this rumor along one relationship today."""
+    """Probability the teller passes this rumor along one relationship today.
+
+    This is the Day-6 hand-rolled formula; since Day 7 it is the rule fallback
+    behind the trained propagation model (spread_probability).
+    """
     drama = max(0, min(100, int(rumor.get("drama_score", 50)))) / 100.0
     rate = float(rumor.get("propagation_rate", 0.3))
     chance = rate * _gossip_propensity(teller) * (0.5 + drama)
     return max(0.0, min(MAX_GOSSIP_CHANCE, chance))
+
+
+# Day 7 (Model 1): a trained classifier predicts the per-hop spread probability,
+# adding the teller<->listener relationship the bare formula ignored - a juicy
+# rumor travels faster between close friends. gossip_chance stays the fallback.
+_prop_model: Optional[Any] = None
+_prop_model_trained = False
+
+# Distortion: each successful hop has a small chance to garble the tale a little,
+# nudging current_text away from original_event and bumping distortion_level
+# (which sat at 0 before Day 7). Deterministic text-blur, no LLM in the tick.
+DISTORTION_CHANCE = 0.15
+MAX_DISTORTION_LEVEL = 3
+_HEDGES = [
+    "- or so they say.",
+    "- though the details differ in each telling.",
+    "...if the tale is even true anymore.",
+]
+
+
+def _get_prop_model() -> Optional[Any]:
+    global _prop_model, _prop_model_trained
+    if not _prop_model_trained:
+        _prop_model = ml.train_rumor_propagation_model()
+        _prop_model_trained = True
+    return _prop_model
+
+
+def spread_probability(
+    teller: dict[str, Any],
+    rumor: dict[str, Any],
+    relationship: Optional[dict[str, Any]] = None,
+) -> float:
+    """Model-driven per-hop spread probability, relationship-aware (Model 1)."""
+    drama = max(0, min(100, int(rumor.get("drama_score", 50)))) / 100.0
+    rate = float(rumor.get("propagation_rate", 0.3))
+    propensity = _gossip_propensity(teller)
+    rel_sentiment = int(relationship.get("sentiment", 0)) if relationship else 0
+    rel_norm = (max(-100, min(100, rel_sentiment)) + 100) / 200.0
+    return ml.predict_spread_probability(_get_prop_model(), rate, drama, propensity, rel_norm)
+
+
+def _maybe_distort(rumor: dict[str, Any], rng: random.Random) -> None:
+    """On a hop, sometimes garble the rumor: bump distortion_level and hedge the
+    text so it visibly drifts from the original event as it travels."""
+    if rng.random() >= DISTORTION_CHANCE:
+        return
+    level = int(rumor.get("distortion_level", 0))
+    if level >= MAX_DISTORTION_LEVEL:
+        return
+    rumor["distortion_level"] = level + 1
+    text = str(rumor.get("current_text", "")).rstrip()
+    hedge = _HEDGES[min(level, len(_HEDGES) - 1)]
+    if text and hedge not in text:
+        rumor["current_text"] = f"{text} {hedge}"
 
 
 def _learn(npc: dict[str, Any], rumor_id: str) -> bool:
@@ -135,11 +196,12 @@ def propagate_daily(
                     continue
                 if listener["id"] in known:
                     continue
-                if rng.random() >= gossip_chance(teller, rumor):
+                if rng.random() >= spread_probability(teller, rumor, relation):
                     continue
                 known.append(listener["id"])
                 _learn(listener, rumor["id"])
                 _mark(listener)
+                _maybe_distort(rumor, rng)
                 spread_count += 1
                 tells += 1
 

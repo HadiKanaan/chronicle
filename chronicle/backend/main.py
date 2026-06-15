@@ -16,10 +16,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from database import (
+    append_faction_history,
     get_active_rumors,
     get_all_factions,
     get_all_npcs,
     get_continent,
+    get_faction_relationships,
     get_npc,
     get_npcs_by_tier,
     get_recent_log,
@@ -28,6 +30,7 @@ from database import (
     log_event,
     save_continent,
     save_faction,
+    save_faction_relationship,
     save_npc,
     save_npcs,
     save_rumor,
@@ -41,6 +44,7 @@ from systems import (
     conversation,
     demon_lord,
     factions,
+    relationships,
     rumors,
     weather,
     world_gen,
@@ -140,8 +144,17 @@ def _advance_one_hour_locked() -> Optional[int]:
                 f"The weather turned to {state['region']['current_weather']}.",
             )
 
-        # Propagate yesterday's rumors before saving today's, so a newborn
-        # rumor never ages or spreads on its birth morning.
+        # Day 7 Model 2: NPC relationship drift runs BEFORE rumor propagation -
+        # the fresh edge sentiments feed the spread model (a tale travels faster
+        # between close friends).
+        drift = relationships.drift_relationships_daily(npcs, _tick_rng)
+        _collect(drift["changed"])
+        for note in drift["notes"][:2]:
+            log_event(day, hour, "relationship", note)
+
+        # Day 7 Model 1: propagate yesterday's rumors (relationship-aware spread +
+        # distortion) before saving today's, so a newborn rumor never ages or
+        # spreads on its birth morning.
         spread = rumors.propagate_daily(npcs, get_active_rumors(), _tick_rng)
         _collect(spread["npc_changes"])
         for rumor in spread["rumor_changes"]:
@@ -164,11 +177,29 @@ def _advance_one_hour_locked() -> Optional[int]:
             f"weather {state['region']['current_weather']}.",
         )
 
-        # Day 7: faction morale eases from its members' moods toward baseline -
-        # the restoring force that heals Demon-Lord damage over time instead of
-        # letting it ratchet to 0. Faction-level write, so it rides _sim_lock.
-        for faction in factions.update_morale_daily(get_all_factions(), npcs):
+        # Day 7 faction aggregations (all under _sim_lock). Fetch the faction
+        # list once; morale drift and the player-reputation scorer both mutate it.
+        faction_list = get_all_factions()
+        # Morale eases from member moods toward baseline (heals Demon-Lord damage).
+        morale_changed = factions.update_morale_daily(faction_list, npcs)
+        # Model 3: player_reputation drifts toward members' loyalty-weighted
+        # sentiment - now the ONLY writer, so it genuinely tracks the player.
+        rep_changed = factions.update_player_reputation_daily(faction_list, npcs)
+        for faction in {f["id"]: f for f in (*morale_changed, *rep_changed)}.values():
             save_faction(faction)
+
+        # Model 4: inter-faction relationships drift from collective moods +
+        # shared morale pressure (toward their Day-2 seed). Log the biggest shift.
+        rel_result = factions.update_faction_relationships_daily(
+            get_faction_relationships(), {f["id"]: f for f in faction_list}, npcs
+        )
+        for row in rel_result["changed"]:
+            save_faction_relationship(row)
+        if rel_result["notes"]:
+            top = rel_result["notes"][0]
+            log_event(day, hour, "faction", top["text"])
+            append_faction_history(top["a"], day, top["text"])
+            append_faction_history(top["b"], day, top["text"])
 
     hourly = behavior.update_hourly(state, npcs, _tick_rng)
     _collect(hourly["changed"])

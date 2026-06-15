@@ -508,3 +508,197 @@ def generate_country_properties(
     if aridity >= _COUNTRY_ARID_TIMBER_CUTOFF:
         values["timber"] = min(values["timber"], 5)
     return values
+
+
+# --------------------------------------------------------------------------- #
+# Day 7 live ML batch — four dawn-triggered models. Each follows the house
+# pattern: a ground-truth rule fn, synthetic samples labelled by it, a fitted
+# RandomForestRegressor, and a predict() wrapper that falls back to the rule.
+# --------------------------------------------------------------------------- #
+
+# ----- Model 1: rumor propagation (per teller->listener, per dawn) ----------- #
+MAX_SPREAD_PROBABILITY = 0.90
+
+
+def _spread_rule(rate: float, drama: float, propensity: float, rel_sentiment_norm: float) -> float:
+    """Probability a teller passes a rumor to one relation today.
+
+    Extends the Day-6 gossip_chance formula (rate x propensity x drama factor)
+    with the relationship: a warmer bond carries the tale more readily.
+    """
+    base = rate * propensity * (0.5 + drama)
+    rel_factor = 0.7 + 0.6 * rel_sentiment_norm  # [0.7 .. 1.3]
+    return max(0.0, min(MAX_SPREAD_PROBABILITY, base * rel_factor))
+
+
+def train_rumor_propagation_model(seed: int = 43) -> Optional[Any]:
+    if not _ML_AVAILABLE:
+        return None
+    rng = np.random.RandomState(seed)
+    n = 2000
+    rate, drama, prop, rel = rng.rand(n), rng.rand(n), rng.rand(n), rng.rand(n)
+    features = np.column_stack([rate, drama, prop, rel])
+    labels = np.array([_spread_rule(rate[i], drama[i], prop[i], rel[i]) for i in range(n)])
+    labels = np.clip(labels + rng.normal(0.0, 0.02, n), 0.0, MAX_SPREAD_PROBABILITY)
+    model = RandomForestRegressor(n_estimators=40, max_depth=8, random_state=seed)
+    model.fit(features, labels)
+    return model
+
+
+def predict_spread_probability(
+    model: Optional[Any],
+    rate: float,
+    drama: float,
+    propensity: float,
+    rel_sentiment_norm: float,
+) -> float:
+    if model is None or not _ML_AVAILABLE:
+        return _spread_rule(rate, drama, propensity, rel_sentiment_norm)
+    value = float(model.predict(np.array([[rate, drama, propensity, rel_sentiment_norm]]))[0])
+    return max(0.0, min(MAX_SPREAD_PROBABILITY, value))
+
+
+# ----- Model 2: NPC relationship drift (per Tier-1 edge, per dawn) ----------- #
+RELATIONSHIP_DELTA_LIMIT = 6
+
+
+def _relationship_drift_rule(
+    current_norm: float,
+    valence_a: float,
+    valence_b: float,
+    same_faction: float,
+    shared_norm: float,
+) -> float:
+    """Daily change to a directed relationship's sentiment (in points).
+
+    Shared good spirits warm a bond, shared misery cools it, a common faction
+    pulls people together, common knowledge gives them something to share, and a
+    decay term eases every bond back toward neutral when nothing reinforces it.
+    """
+    mood_pull = 4.0 * (valence_a + valence_b - 1.0)
+    faction_pull = 1.5 if same_faction >= 0.5 else -0.5
+    shared_pull = 2.0 * shared_norm
+    decay = -2.0 * current_norm
+    delta = mood_pull + faction_pull + shared_pull + decay
+    return max(-RELATIONSHIP_DELTA_LIMIT, min(RELATIONSHIP_DELTA_LIMIT, delta))
+
+
+def train_relationship_drift_model(seed: int = 47) -> Optional[Any]:
+    if not _ML_AVAILABLE:
+        return None
+    rng = np.random.RandomState(seed)
+    n = 2500
+    cur = rng.uniform(-1.0, 1.0, n)
+    va, vb = rng.rand(n), rng.rand(n)
+    same = rng.randint(0, 2, n).astype(float)
+    shared = rng.rand(n)
+    features = np.column_stack([cur, va, vb, same, shared])
+    labels = np.array(
+        [_relationship_drift_rule(cur[i], va[i], vb[i], same[i], shared[i]) for i in range(n)]
+    )
+    labels = labels + rng.normal(0.0, 0.3, n)
+    model = RandomForestRegressor(n_estimators=40, max_depth=8, random_state=seed)
+    model.fit(features, labels)
+    return model
+
+
+def predict_sentiment_delta(
+    model: Optional[Any],
+    current_sentiment: float,
+    valence_a: float,
+    valence_b: float,
+    same_faction: bool,
+    shared_norm: float,
+) -> float:
+    current_norm = max(-1.0, min(1.0, current_sentiment / 100.0))
+    same = 1.0 if same_faction else 0.0
+    if model is None or not _ML_AVAILABLE:
+        return _relationship_drift_rule(current_norm, valence_a, valence_b, same, shared_norm)
+    value = float(model.predict(np.array([[current_norm, valence_a, valence_b, same, shared_norm]]))[0])
+    return max(-RELATIONSHIP_DELTA_LIMIT, min(RELATIONSHIP_DELTA_LIMIT, value))
+
+
+# ----- Model 3: player reputation scorer (per faction, per dawn) ------------- #
+def _reputation_target_rule(weighted_mean_sentiment: float, member_count_norm: float) -> float:
+    """The faction's regard for the player IS its members' loyalty-weighted mean
+    sentiment; with few members it reverts toward neutral 50 (low confidence)."""
+    confidence = 0.4 + 0.6 * member_count_norm
+    return 50.0 + (weighted_mean_sentiment - 50.0) * confidence
+
+
+def train_player_reputation_model(seed: int = 53) -> Optional[Any]:
+    if not _ML_AVAILABLE:
+        return None
+    rng = np.random.RandomState(seed)
+    n = 2000
+    weighted_mean = rng.uniform(0.0, 100.0, n)
+    count_norm = rng.rand(n)
+    features = np.column_stack([weighted_mean, count_norm])
+    labels = np.array([_reputation_target_rule(weighted_mean[i], count_norm[i]) for i in range(n)])
+    labels = np.clip(labels + rng.normal(0.0, 1.5, n), 0.0, 100.0)
+    model = RandomForestRegressor(n_estimators=40, max_depth=8, random_state=seed)
+    model.fit(features, labels)
+    return model
+
+
+def predict_reputation_target(
+    model: Optional[Any],
+    weighted_mean_sentiment: float,
+    member_count_norm: float,
+) -> float:
+    if model is None or not _ML_AVAILABLE:
+        return max(0.0, min(100.0, _reputation_target_rule(weighted_mean_sentiment, member_count_norm)))
+    value = float(model.predict(np.array([[weighted_mean_sentiment, member_count_norm]]))[0])
+    return max(0.0, min(100.0, value))
+
+
+# ----- Model 4: faction relationship updater (per faction pair, per dawn) ---- #
+FACTION_REL_DELTA_LIMIT = 4
+
+
+def _faction_rel_rule(
+    current_norm: float,
+    seed_norm: float,
+    alignment: float,
+    pressure: float,
+) -> float:
+    """Daily change to two factions' standing with each other.
+
+    Similar collective moods warm the pair, divergent ones cool it; shared
+    stress (low morale under Demon-Lord pressure) cools relations; and a restore
+    term pulls back toward the world's original (Day-2) seed value.
+    """
+    align_pull = 4.0 * (alignment - 0.5)
+    pressure_pull = -4.0 * pressure
+    restore = 2.0 * (seed_norm - current_norm)
+    delta = align_pull + pressure_pull + restore
+    return max(-FACTION_REL_DELTA_LIMIT, min(FACTION_REL_DELTA_LIMIT, delta))
+
+
+def train_faction_relationship_model(seed: int = 59) -> Optional[Any]:
+    if not _ML_AVAILABLE:
+        return None
+    rng = np.random.RandomState(seed)
+    n = 2000
+    cur, sd, align, pressure = rng.rand(n), rng.rand(n), rng.rand(n), rng.rand(n)
+    features = np.column_stack([cur, sd, align, pressure])
+    labels = np.array([_faction_rel_rule(cur[i], sd[i], align[i], pressure[i]) for i in range(n)])
+    labels = labels + rng.normal(0.0, 0.2, n)
+    model = RandomForestRegressor(n_estimators=40, max_depth=8, random_state=seed)
+    model.fit(features, labels)
+    return model
+
+
+def predict_relationship_delta(
+    model: Optional[Any],
+    current_score: float,
+    seed_score: float,
+    alignment: float,
+    pressure: float,
+) -> float:
+    current_norm = max(0.0, min(1.0, current_score / 100.0))
+    seed_norm = max(0.0, min(1.0, seed_score / 100.0))
+    if model is None or not _ML_AVAILABLE:
+        return _faction_rel_rule(current_norm, seed_norm, alignment, pressure)
+    value = float(model.predict(np.array([[current_norm, seed_norm, alignment, pressure]]))[0])
+    return max(-FACTION_REL_DELTA_LIMIT, min(FACTION_REL_DELTA_LIMIT, value))
