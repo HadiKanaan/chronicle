@@ -70,6 +70,25 @@ REPLY_MAX_CHARS = 600
 
 VALID_MOODS = {mood.value for mood in MoodType}
 
+# JSON Schema for the Tier 1 card delta. Passed to Ollama's schema-constrained
+# decoding so the four fields are always present and well-typed - "reply" can no
+# longer be dropped, and "mood" can no longer be an invented label. The salvage/
+# retry net downstream stays as defense in depth (small models still slip).
+CARD_DELTA_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reply": {"type": "string", "minLength": 1},
+        "mood": {"type": "string", "enum": sorted(VALID_MOODS)},
+        "sentiment_delta": {
+            "type": "integer",
+            "minimum": -SENTIMENT_DELTA_LIMIT,
+            "maximum": SENTIMENT_DELTA_LIMIT,
+        },
+        "memory": {"type": "string"},
+    },
+    "required": ["reply", "mood", "sentiment_delta", "memory"],
+}
+
 # Single-call queue: every Ollama request in the process serializes here.
 _llm_lock = threading.Lock()
 _client: Optional[Any] = None
@@ -118,6 +137,7 @@ def _call_llm(
     num_predict: int = CONVERSE_NUM_PREDICT,
     temperature: float = 0.8,
     history: Optional[list[dict[str, str]]] = None,
+    schema: Optional[dict[str, Any]] = None,
 ) -> Optional[str]:
     """One serialized Ollama chat call. Returns the raw text or None on failure.
 
@@ -125,10 +145,18 @@ def _call_llm(
     user message. Keeping system + history byte-identical across turns lets
     Ollama's prefix cache skip re-evaluating them - on this CPU-only laptop
     that is the difference between ~8s and ~70s per call.
+
+    schema (optional JSON Schema) switches Ollama from "valid JSON" to
+    schema-constrained decoding: the grammar forces every required field to be
+    present and well-typed at sampling time, which is what kills qwen3:4b's
+    habit of dropping "reply" or inventing an out-of-enum mood. It constrains
+    sampling only, so the prompt prefix cache is untouched. Falls back to
+    format="json" (syntax only) or None when no schema is given.
     """
     client = _get_client()
     if client is None:
         return None
+    response_format = schema if schema is not None else ("json" if json_format else None)
     try:
         with _llm_lock:
             response = client.chat(
@@ -139,12 +167,13 @@ def _call_llm(
                     {"role": "user", "content": user},
                 ],
                 think=False,
-                format="json" if json_format else None,
+                format=response_format,
                 keep_alive=KEEP_ALIVE,
                 options={"temperature": temperature, "num_predict": num_predict},
             )
         logger.info(
-            "LLM call: prompt_eval=%s tok / %.1fs, gen=%s tok / %.1fs",
+            "LLM call (schema=%s): prompt_eval=%s tok / %.1fs, gen=%s tok / %.1fs",
+            schema is not None,
             getattr(response, "prompt_eval_count", None),
             (getattr(response, "prompt_eval_duration", 0) or 0) / 1e9,
             getattr(response, "eval_count", None),
@@ -461,6 +490,7 @@ def converse_tier1(
             num_predict=CONVERSE_NUM_PREDICT,
             temperature=0.8 if attempt == 0 else 0.95,
             history=history,
+            schema=CARD_DELTA_SCHEMA,
         )
         if raw is None:
             break
@@ -531,6 +561,14 @@ def stub_converse(npc: dict[str, Any]) -> dict[str, Any]:
 CARD_FIELDS = ("appearance", "dark_trait", "redeeming_quality", "trauma", "conversation_style")
 CARD_FIELD_MAX_CHARS = 220
 
+# Schema-constrained shape for the one-off enrichment pass: every flavor field
+# present and a string (empty/short ones are still filtered/truncated below).
+CARD_DETAILS_SCHEMA = {
+    "type": "object",
+    "properties": {field: {"type": "string"} for field in CARD_FIELDS},
+    "required": list(CARD_FIELDS),
+}
+
 
 def build_card_prompt(npc: dict[str, Any]) -> str:
     traits = ", ".join(npc.get("personality_traits", [])) or "unremarkable"
@@ -568,6 +606,7 @@ def generate_card_details(npc: dict[str, Any]) -> Optional[dict[str, str]]:
         json_format=True,
         num_predict=CARD_GEN_NUM_PREDICT,
         temperature=0.9,
+        schema=CARD_DETAILS_SCHEMA,
     )
     if raw is None:
         return None
