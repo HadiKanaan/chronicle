@@ -1,3 +1,6 @@
+import { sendInput } from './api';
+import DebugPanel from './DebugPanel';
+
 function formatHour(hour) {
   const h = Number.isFinite(hour) ? ((hour % 24) + 24) % 24 : 0;
   return `${String(h).padStart(2, '0')}:00`;
@@ -22,6 +25,23 @@ export default function HUD({ gameState }) {
           {gameState.world_paused ? <span style={styles.paused}> ⏸ paused</span> : null}
         </div>
         <div>Weather: {gameState.weather}</div>
+        <div style={styles.llmRow}>
+          <span>
+            LLM: <strong>{gameState.llm_provider ?? 'local'}</strong>
+            {gameState.llm_last_seconds ? (
+              <span style={styles.muted}> · {gameState.llm_last_seconds}s last reply</span>
+            ) : null}
+          </span>
+          <button
+            style={styles.llmBtn}
+            onClick={() => sendInput({ type: 'toggle_provider', payload: {} }).catch(() => {})}
+          >
+            switch
+          </button>
+        </div>
+        {gameState.azure_available === false ? (
+          <div style={styles.legend}>Azure not configured — toggle stays local</div>
+        ) : null}
       </section>
 
       {player ? (
@@ -90,6 +110,8 @@ export default function HUD({ gameState }) {
           ))
         )}
       </section>
+
+      <DebugPanel gameState={gameState} />
     </aside>
   );
 }
@@ -137,6 +159,22 @@ const styles = {
     color: '#6b7280',
     fontSize: '11px',
     marginTop: '6px'
+  },
+  llmRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: '8px',
+    marginTop: '4px'
+  },
+  llmBtn: {
+    background: '#222833',
+    color: '#f5f5f5',
+    border: '1px solid #39414d',
+    borderRadius: '4px',
+    padding: '2px 8px',
+    cursor: 'pointer',
+    fontSize: '11px'
   },
   paused: {
     color: '#8ab4f8'

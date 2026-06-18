@@ -70,6 +70,19 @@ export async function getContinent() {
   return response.json();
 }
 
+// Demo/debug controls (set time, trigger a dawn tick, set faction scores).
+export async function sendDebug(action, payload = {}) {
+  const response = await fetch('/api/debug', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action, payload })
+  });
+  if (!response.ok) {
+    throw new Error(`Debug command failed: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function getLog() {
   const response = await fetch('/api/log');
   if (!response.ok) {

@@ -82,3 +82,8 @@ class RenderPayload(BaseModel):
     demon_lord_decisions: list[str] = Field(default_factory=list)
     # True while the world clock holds still (dialogue open / daily decision).
     world_paused: bool = False
+    # Demo: which LLM backs conversations now, how long the last call took, and
+    # whether the Azure provider is configured (gates the toggle in the UI).
+    llm_provider: str = "local"
+    llm_last_seconds: float = 0.0
+    azure_available: bool = False

@@ -15,6 +15,11 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+try:  # optional; only needed to load Azure creds from a .env for the demo
+    from dotenv import load_dotenv
+except Exception:  # noqa: BLE001
+    load_dotenv = None  # type: ignore[assignment]
+
 from database import (
     append_faction_history,
     get_active_rumors,
@@ -417,6 +422,11 @@ def _warm_llm_and_enrich_tier1() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Load demo creds (Azure OpenAI) from chronicle/.env before anything reads
+    # them. conversation.py reads these dynamically, so this just needs to run
+    # before the first LLM call.
+    if load_dotenv is not None:
+        load_dotenv(BASE_DIR.parent / ".env")
     # Surface the LLM client's per-call timing/error lines on the console so
     # slow or stubbed conversations are diagnosable at a glance.
     logging.basicConfig(level=logging.WARNING)
@@ -692,6 +702,9 @@ def _build_render_payload() -> RenderPayload:
         rumors=rumor_lines,
         demon_lord_decisions=decision_lines,
         world_paused=_world_frozen(),
+        llm_provider=conversation.current_provider(),
+        llm_last_seconds=conversation.last_call_seconds(),
+        azure_available=conversation.azure_available(),
     )
 
 
@@ -722,8 +735,84 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
         _reveal_all = not _reveal_all
         return JSONResponse({"status": "ok", "accepted": True, "reveal_all": _reveal_all})
 
+    # Demo toggle: switch the LLM provider (local Ollama <-> Azure OpenAI). Only
+    # engages azure when it is configured; otherwise stays local.
+    if player_input.type == "toggle_provider":
+        provider = conversation.toggle_provider()
+        return JSONResponse({
+            "status": "ok", "accepted": True,
+            "provider": provider, "azure_available": conversation.azure_available(),
+        })
+
     log_event(1, 6, player_input.type, f"Input received: {player_input.type}")
     return JSONResponse({"status": "ok", "accepted": True})
+
+
+class DebugInput(BaseModel):
+    action: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+def _find_faction(key: str) -> Optional[dict[str, Any]]:
+    """Resolve a faction by id or display name (case-insensitive)."""
+    key_norm = key.strip().lower()
+    for faction in get_all_factions():
+        if str(faction.get("id", "")).lower() == key_norm or str(faction.get("name", "")).lower() == key_norm:
+            return faction
+    return None
+
+
+@app.post("/api/debug")
+def post_debug(cmd: DebugInput) -> JSONResponse:
+    """Demo/debug controls for in-game stats: jump time, fire a dawn tick on
+    cue, and set faction reputation/morale. State writes hold _sim_lock so they
+    never tear a concurrent world tick."""
+    action = cmd.action
+    payload = cmd.payload
+
+    if action == "set_time":
+        with _sim_lock:
+            state = get_world_state()
+            if state is None:
+                raise HTTPException(status_code=409, detail="World not generated yet")
+            if "day" in payload:
+                state["current_day"] = max(1, int(payload["day"]))
+            if "hour" in payload:
+                state["current_hour"] = max(0, min(23, int(payload["hour"])))
+            save_world_state(state)
+        return JSONResponse({"status": "ok", "action": action})
+
+    if action == "advance_hour":
+        # Advances one in-game hour (may land on dawn and fire the daily batch).
+        _advance_one_hour()
+        return JSONResponse({"status": "ok", "action": action})
+
+    if action == "trigger_dawn":
+        # Set the clock to one hour before dawn, then advance so the next tick
+        # IS dawn - runs relationship drift, rumor spread, reputation + faction
+        # updates immediately (great for showing the ML batch on cue).
+        with _sim_lock:
+            state = get_world_state()
+            if state is None:
+                raise HTTPException(status_code=409, detail="World not generated yet")
+            state["current_hour"] = 5
+            save_world_state(state)
+        _advance_one_hour()
+        return JSONResponse({"status": "ok", "action": action})
+
+    if action == "set_faction":
+        with _sim_lock:
+            faction = _find_faction(str(payload.get("faction", "")))
+            if faction is None:
+                raise HTTPException(status_code=404, detail="Unknown faction")
+            if "reputation" in payload:
+                faction["player_reputation"] = max(0, min(100, int(payload["reputation"])))
+            if "morale" in payload:
+                faction["morale"] = max(0, min(100, int(payload["morale"])))
+            save_faction(faction)
+        return JSONResponse({"status": "ok", "action": action, "faction": faction.get("name")})
+
+    raise HTTPException(status_code=400, detail=f"Unknown debug action: {action}")
 
 
 class ConversationInput(BaseModel):

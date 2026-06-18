@@ -26,9 +26,11 @@ from __future__ import annotations
 import difflib
 import json
 import logging
+import os
 import random
 import re
 import threading
+import time
 from typing import Any, Optional
 
 from ml import train as ml
@@ -42,9 +44,21 @@ except Exception:  # noqa: BLE001 - missing client just means stub replies
     ollama = None  # type: ignore[assignment]
     _OLLAMA_IMPORTED = False
 
+try:  # pragma: no cover - optional; only used when the Azure provider is on
+    from openai import AzureOpenAI
+
+    _OPENAI_IMPORTED = True
+except Exception:  # noqa: BLE001 - missing lib just means the azure toggle stays off
+    AzureOpenAI = None  # type: ignore[assignment]
+    _OPENAI_IMPORTED = False
+
 
 # The one swappable model decision (see specs research.md decision 4).
-MODEL = "qwen3:4b"
+# Demo config: qwen2.5:1.5b-instruct for max responsiveness (~8-12s warm on this
+# CPU vs ~20s for 3b, ~45s for 4b). The schema constraint keeps its output
+# well-formed; the occupation-anchored prompt curbs the small-model quirks. Swap
+# to "qwen2.5:3b-instruct" for quality or "qwen3:4b" for top quality.
+MODEL = "qwen2.5:1.5b-instruct"
 OLLAMA_HOST = "http://localhost:11434"
 # Keep the model resident permanently (~3.5 GB RAM): an idle unload costs ~18s
 # of cold reload on the next conversation, the worst possible first impression.
@@ -119,6 +133,68 @@ def llm_available() -> bool:
         return False
 
 
+# --------------------------------------------------------------------------- #
+# Provider selection (demo): local Ollama vs Azure OpenAI, toggled live. Azure
+# is configured purely from environment variables (the key never lives in code
+# or logs), and the toggle only engages it when those are present - otherwise it
+# stays on local. Lets the demo show the local 1.5B is almost as fast as cloud.
+# --------------------------------------------------------------------------- #
+_provider = "local"  # "local" | "azure"
+_last_call_seconds = 0.0
+_last_provider = "local"
+_azure_client: Optional[Any] = None
+
+
+def _azure_config() -> tuple[Optional[str], Optional[str], Optional[str], str]:
+    """Read Azure creds from the environment at call time (not import time) so a
+    .env loaded after import - or changed between runs - is always picked up."""
+    return (
+        os.environ.get("AZURE_OPENAI_ENDPOINT"),
+        os.environ.get("AZURE_OPENAI_API_KEY"),
+        os.environ.get("AZURE_OPENAI_DEPLOYMENT"),
+        os.environ.get("AZURE_OPENAI_API_VERSION", "2024-08-01-preview"),
+    )
+
+
+def azure_available() -> bool:
+    """True when the openai lib is importable and Azure creds are all present."""
+    endpoint, api_key, deployment, _ = _azure_config()
+    return bool(_OPENAI_IMPORTED and endpoint and api_key and deployment)
+
+
+def current_provider() -> str:
+    return _provider
+
+
+def last_call_seconds() -> float:
+    return round(_last_call_seconds, 2)
+
+
+def toggle_provider() -> str:
+    """Flip local<->azure. Engages azure only when configured; otherwise stays
+    local so the demo toggle never lands on a dead provider."""
+    global _provider
+    if _provider == "local":
+        _provider = "azure" if azure_available() else "local"
+    else:
+        _provider = "local"
+    return _provider
+
+
+def _get_azure_client() -> Optional[Any]:
+    global _azure_client
+    if not azure_available():
+        return None
+    if _azure_client is None:
+        endpoint, api_key, _, api_version = _azure_config()
+        _azure_client = AzureOpenAI(
+            azure_endpoint=endpoint,
+            api_key=api_key,
+            api_version=api_version,
+        )
+    return _azure_client
+
+
 def prewarm() -> bool:
     """Load the model into memory so the first real conversation is warm."""
     reply = _call_llm(
@@ -153,37 +229,94 @@ def _call_llm(
     sampling only, so the prompt prefix cache is untouched. Falls back to
     format="json" (syntax only) or None when no schema is given.
     """
+    global _last_call_seconds, _last_provider
+    # Only engage azure when it is actually configured; otherwise stay local.
+    provider = _provider if (_provider == "local" or azure_available()) else "local"
+    start = time.monotonic()
+    text: Optional[str] = None
+    try:
+        with _llm_lock:
+            if provider == "azure":
+                text = _call_azure(system, user, json_format, num_predict, temperature, history)
+            else:
+                text = _call_ollama(system, user, json_format, num_predict, temperature, history, schema)
+    except Exception as exc:  # noqa: BLE001 - any transport/model failure -> stub path
+        # Surfaced on the uvicorn console so silent stub replies are explainable.
+        logger.warning("LLM call failed (provider=%s): %r", provider, exc)
+        text = None
+    finally:
+        _last_call_seconds = time.monotonic() - start
+        _last_provider = provider
+    return text
+
+
+def _call_ollama(
+    system: str,
+    user: str,
+    json_format: bool,
+    num_predict: int,
+    temperature: float,
+    history: Optional[list[dict[str, str]]],
+    schema: Optional[dict[str, Any]],
+) -> Optional[str]:
+    """Local Ollama chat call (caller holds _llm_lock)."""
     client = _get_client()
     if client is None:
         return None
     response_format = schema if schema is not None else ("json" if json_format else None)
-    try:
-        with _llm_lock:
-            response = client.chat(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": system},
-                    *(history or []),
-                    {"role": "user", "content": user},
-                ],
-                think=False,
-                format=response_format,
-                keep_alive=KEEP_ALIVE,
-                options={"temperature": temperature, "num_predict": num_predict},
-            )
-        logger.info(
-            "LLM call (schema=%s): prompt_eval=%s tok / %.1fs, gen=%s tok / %.1fs",
-            schema is not None,
-            getattr(response, "prompt_eval_count", None),
-            (getattr(response, "prompt_eval_duration", 0) or 0) / 1e9,
-            getattr(response, "eval_count", None),
-            (getattr(response, "eval_duration", 0) or 0) / 1e9,
-        )
-        return response["message"]["content"]
-    except Exception as exc:  # noqa: BLE001 - any transport/model failure -> stub path
-        # Surfaced on the uvicorn console so silent stub replies are explainable.
-        logger.warning("LLM call failed (%s): %r", MODEL, exc)
+    response = client.chat(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": system},
+            *(history or []),
+            {"role": "user", "content": user},
+        ],
+        think=False,
+        format=response_format,
+        keep_alive=KEEP_ALIVE,
+        options={"temperature": temperature, "num_predict": num_predict},
+    )
+    logger.info(
+        "Ollama call (schema=%s): prompt_eval=%s tok / %.1fs, gen=%s tok / %.1fs",
+        schema is not None,
+        getattr(response, "prompt_eval_count", None),
+        (getattr(response, "prompt_eval_duration", 0) or 0) / 1e9,
+        getattr(response, "eval_count", None),
+        (getattr(response, "eval_duration", 0) or 0) / 1e9,
+    )
+    return response["message"]["content"]
+
+
+def _call_azure(
+    system: str,
+    user: str,
+    json_format: bool,
+    num_predict: int,
+    temperature: float,
+    history: Optional[list[dict[str, str]]],
+) -> Optional[str]:
+    """Azure OpenAI chat call (caller holds _llm_lock). JSON mode stands in for
+    Ollama's schema-constrained decoding; the parse/repair net handles the rest."""
+    client = _get_azure_client()
+    if client is None:
         return None
+    _, _, deployment, _ = _azure_config()
+    messages = [
+        {"role": "system", "content": system},
+        *(history or []),
+        {"role": "user", "content": user},
+    ]
+    kwargs: dict[str, Any] = {
+        "model": deployment,
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": num_predict,
+    }
+    if json_format:
+        kwargs["response_format"] = {"type": "json_object"}
+    response = client.chat.completions.create(**kwargs)
+    logger.info("Azure call (deployment=%s) ok", deployment)
+    return response.choices[0].message.content
 
 
 # --------------------------------------------------------------------------- #
@@ -284,6 +417,10 @@ def parse_card_delta(raw: str, current_mood: str) -> dict[str, Any]:
             reply = memory_candidate
     if not reply:
         reply = _safe_line(current_mood)
+    # A spoken line should never carry a "Day N:" stamp - that only appears when
+    # the model imitates the stamped memories in its prompt (often via the
+    # memory-field salvage). Strip it so it never reaches the player.
+    reply = re.sub(r"^\s*Day\s+\d+:\s*", "", reply)
     reply = reply[:REPLY_MAX_CHARS]
 
     try:
@@ -359,7 +496,7 @@ def build_character_prompt(npc: dict[str, Any]) -> str:
     lines = [
         f"You are roleplaying {npc.get('name', 'a villager')}, a "
         f"{npc.get('age', 30)}-year-old {npc.get('occupation', 'villager')} in "
-        "Aldenmoor, a small medieval river town.",
+        "Aldenmoor, a small medieval town.",
         f"Personality: {traits}.",
     ]
     if npc.get("appearance"):
@@ -376,11 +513,16 @@ def build_character_prompt(npc: dict[str, Any]) -> str:
         lines.append(f"How you speak: {npc['conversation_style']}.")
 
     moods = ", ".join(sorted(VALID_MOODS))
+    occupation = npc.get("occupation", "villager")
     lines.append(
-        "Stay in character: speak plainly in a medieval tone, 1-3 short "
-        "sentences, and never mention being an AI or a game. "
-        "Answer the player's latest words directly; never repeat your earlier "
-        "lines word-for-word. "
+        "Speak plainly and concretely, like a real townsperson in conversation - "
+        "1 to 2 short, direct sentences in a light medieval tone. Do NOT use "
+        "flowery metaphors, riddles, or grand cosmic imagery, and do NOT keep "
+        "returning to the same image (e.g. do not mention the river in every "
+        f"reply). Ground what you say in your own life as a {occupation}: your "
+        "trade and tools, the folk you deal with, your neighbours, and recent "
+        "happenings. Answer the player's actual words directly. Never mention "
+        "being an AI or a game, and never repeat your earlier lines word-for-word. "
         "Respond ONLY with one JSON object exactly like this: "
         '{"reply": "<what you say out loud>", '
         f'"mood": "<your mood now, one of: {moods}>", '

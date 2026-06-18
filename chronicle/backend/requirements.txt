@@ -3,5 +3,7 @@ uvicorn[standard]
 scikit-learn
 numpy
 ollama
+openai
+python-dotenv
 pydantic
 pytest
