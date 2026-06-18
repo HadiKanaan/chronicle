@@ -556,7 +556,9 @@ def build_situation_block(
         f"You feel {sentiment_phrase(sentiment)} toward {player_name} "
         f"(sentiment {sentiment}/100).",
     ]
-    memories = npc.get("memory_buffer", [])[-5:]
+    # Keep only the most recent few: a long memory list buries the actual
+    # question lower in the prompt, where a small model under-attends to it.
+    memories = npc.get("memory_buffer", [])[-3:]
     if memories:
         lines.append("Things you remember:")
         lines.extend(f"- {memory}" for memory in memories)
@@ -613,10 +615,14 @@ def converse_tier1(
     """
     system = build_character_prompt(npc)
     history = _history_messages(npc)
+    # Restate the player's CURRENT message as the very last thing the model
+    # reads, and tell it not to answer an earlier turn - small models otherwise
+    # carry conversational momentum and reply to the previous question.
     base_user = (
         build_situation_block(npc, player_name, rumor_texts)
-        + f"\n{player_name} says: {player_text}\n"
-        + 'Answer now with the JSON object - "reply" first.'
+        + f'\n{player_name} just said to you: "{player_text}"\n'
+        + f'Reply directly to that latest message ("{player_text}"), NOT to '
+        + 'anything said earlier. Respond now with the JSON object, "reply" first.'
     )
     current_mood = npc.get("current_mood", "neutral")
     stored_history = npc.get("conversation_history") or []
