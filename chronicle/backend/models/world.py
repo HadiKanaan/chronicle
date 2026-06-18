@@ -76,6 +76,11 @@ class RenderPayload(BaseModel):
     current_day: int = 1
     current_hour: int = 6
     fog_map: list[dict] = Field(default_factory=list)
+    # Day 8 visual flavor: display-ready building footprints (drawn as sprites)
+    # and the static decoration scatter (trees/bushes/rocks). Both are
+    # render-only - simulation fields stay backend-side.
+    buildings: list[dict] = Field(default_factory=list)
+    decorations: list[dict] = Field(default_factory=list)
     # Day 6: display-ready strings only - rumor summaries and the Demon Lord's
     # recent decisions for the HUD.
     rumors: list[str] = Field(default_factory=list)

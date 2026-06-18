@@ -20,6 +20,27 @@ export const TILE_ATLAS = {
 
 export const TILE_FALLBACK = { color: '#5c8c48' };
 
+// building_type -> a single front-view structure sprite (Kenney medieval-RTS).
+// The renderer blits one sprite over each building's footprint, above the
+// wall/floor tiles (which remain the fallback when a sprite is missing). Each
+// sprite is its own full image, so only the src is needed.
+export const BUILDING_ATLAS = {
+  tavern: { src: '/assets/buildings/tavern.png' },
+  blacksmith: { src: '/assets/buildings/blacksmith.png' },
+  market: { src: '/assets/buildings/market.png' },
+  church: { src: '/assets/buildings/church.png' },
+  magistrate_hall: { src: '/assets/buildings/magistrate_hall.png' },
+  house: { src: '/assets/buildings/house.png' },
+};
+
+// decoration_type -> a single environment prop sprite. Drawn one-per-tile,
+// anchored to the tile's base, beneath characters.
+export const DECORATION_ATLAS = {
+  tree: { src: '/assets/decorations/tree.png' },
+  bush: { src: '/assets/decorations/bush.png' },
+  rock: { src: '/assets/decorations/rock.png' },
+};
+
 // sprite_id -> first idle frame of a Pixel Crawler character sheet. `scale`
 // normalizes the differing frame paddings so every character lands at roughly
 // one-and-a-half tiles tall on screen.
@@ -48,6 +69,12 @@ export function allImageSources() {
     if (entry.src) sources.add(entry.src);
   }
   for (const entry of Object.values(CHARACTER_ATLAS)) {
+    if (entry.src) sources.add(entry.src);
+  }
+  for (const entry of Object.values(BUILDING_ATLAS)) {
+    if (entry.src) sources.add(entry.src);
+  }
+  for (const entry of Object.values(DECORATION_ATLAS)) {
     if (entry.src) sources.add(entry.src);
   }
   return [...sources];

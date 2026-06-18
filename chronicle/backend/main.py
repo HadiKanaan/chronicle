@@ -30,6 +30,7 @@ from database import (
     get_npc,
     get_npcs_by_tier,
     get_recent_log,
+    get_region_decorations,
     get_world_state,
     init_db,
     log_event,
@@ -38,6 +39,7 @@ from database import (
     save_faction_relationship,
     save_npc,
     save_npcs,
+    save_region_decorations,
     save_rumor,
     save_world_state,
     world_is_generated,
@@ -47,6 +49,7 @@ from systems import (
     behavior,
     continent,
     conversation,
+    decorations,
     demon_lord,
     factions,
     relationships,
@@ -356,6 +359,32 @@ def _ensure_demon_lord() -> None:
         )
 
 
+def _ensure_decorations() -> None:
+    """Generate the static decoration scatter ONCE for the live world (Day 8).
+
+    Idempotent and non-destructive: if decorations are already persisted in
+    region_static it returns immediately, so an existing world is never
+    regenerated and the scatter stays stable across restarts. Otherwise it
+    derives a deterministic tree/bush/rock layer from the current tiles and NPC
+    home/work positions and folds it into region_static alongside the grid.
+    """
+    with _sim_lock:
+        if get_region_decorations():
+            return
+        state = get_world_state()
+        if not state:
+            return
+        region = state.get("region")
+        if not isinstance(region, dict) or not region.get("tiles"):
+            return
+        scatter = decorations.generate_decorations(region, get_all_npcs())
+        save_region_decorations(scatter)
+        log_event(
+            int(state.get("current_day", 1)), int(state.get("current_hour", 6)),
+            "decorations", f"Decoration layer generated: {len(scatter)} props.",
+        )
+
+
 def _advance_one_move_step() -> None:
     """Pop one cached path step per NPC (movement sub-tick, no clock change)."""
     with _sim_lock:
@@ -442,6 +471,8 @@ async def lifespan(_app: FastAPI):
         )
     # Day 6: the antagonist joins the live world in place; never regenerate.
     _ensure_demon_lord()
+    # Day 8: generate the static visual decoration layer once (idempotent).
+    _ensure_decorations()
     tick_task = asyncio.create_task(_world_tick_loop()) if TICK_ENABLED else None
     # Day 5: warm the conversation model and flesh out Tier 1 cards without
     # blocking startup; daemon so it never holds up shutdown.
@@ -657,6 +688,20 @@ def _build_render_payload() -> RenderPayload:
         for row in region.tiles
         for tile in row
     ]
+    # Day 8: surface building footprints as display-ready dicts (sprite layer);
+    # simulation-only fields (id, owner_npc_id) stay backend-side. Decorations
+    # are the persisted static scatter, already display-ready.
+    buildings = [
+        {
+            "building_type": b.building_type,
+            "x": b.x,
+            "y": b.y,
+            "width": b.width,
+            "height": b.height,
+        }
+        for b in region.buildings
+    ]
+    decorations = get_region_decorations()
     all_factions = get_all_factions()
     # Day 7: reputation now means the faction's regard for the PLAYER (player-
     # driven); morale is its own cohesion/wellbeing (what the Demon Lord erodes).
@@ -699,6 +744,8 @@ def _build_render_payload() -> RenderPayload:
         current_day=world_state.current_day,
         current_hour=world_state.current_hour,
         fog_map=fog_map,
+        buildings=buildings,
+        decorations=decorations,
         rumors=rumor_lines,
         demon_lord_decisions=decision_lines,
         world_paused=_world_frozen(),
@@ -965,6 +1012,7 @@ def get_conversation_context(npc_id: str) -> JSONResponse:
 def generate_world() -> JSONResponse:
     summary = world_gen.generate_world()
     _ensure_demon_lord()
+    _ensure_decorations()
     return JSONResponse({"status": "generated", **summary})
 
 

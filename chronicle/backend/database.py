@@ -136,6 +136,31 @@ def save_region_static(region: dict[str, Any]) -> None:
         )
 
 
+def get_region_decorations() -> list[dict[str, Any]]:
+    """The persisted static decoration scatter (Day 8), or [] if not generated.
+
+    Decorations are visual-only and stored inside the region_static blob so they
+    share the tiles' write-once lifecycle and are never rewritten by the hourly
+    world tick."""
+    static = get_region_static()
+    if not static:
+        return []
+    return static.get("decorations") or []
+
+
+def save_region_decorations(decorations: list[dict[str, Any]]) -> None:
+    """Fold the decoration layer into region_static without rewriting the tile
+    grid or buildings already stored there. Idempotent: callers generate once
+    and persist, then read back via get_region_decorations."""
+    static = get_region_static() or {}
+    static["decorations"] = decorations
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO region_static (id, data) VALUES (1, ?)",
+            (_dumps(static),),
+        )
+
+
 def get_world_state() -> Optional[dict[str, Any]]:
     with _connect() as connection:
         row = connection.execute(

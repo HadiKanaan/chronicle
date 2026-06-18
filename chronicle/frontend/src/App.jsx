@@ -16,7 +16,9 @@ const EMPTY_STATE = {
   faction_reputations: {},
   current_day: 1,
   current_hour: 6,
-  fog_map: []
+  fog_map: [],
+  buildings: [],
+  decorations: []
 };
 
 export default function App() {
