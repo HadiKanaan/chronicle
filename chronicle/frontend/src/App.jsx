@@ -4,6 +4,7 @@ import GameCanvas from './GameCanvas';
 import DialogueBox from './DialogueBox';
 import HUD from './HUD';
 import ContinentOverlay from './ContinentOverlay';
+import PauseMenu from './PauseMenu';
 
 const EMPTY_STATE = {
   tiles: [],
@@ -31,6 +32,18 @@ export default function App() {
   // Continent map overlay (press M). Purely a UI panel; the data is fetched
   // once by the overlay component, never in the state poll.
   const [showContinent, setShowContinent] = useState(false);
+  // Full pause menu (Esc). Opening it freezes the world clock; resuming releases
+  // it. Backend stays authoritative - this only posts the pause intent.
+  const [showPauseMenu, setShowPauseMenu] = useState(false);
+
+  const setPaused = (paused) => {
+    sendInput({ type: 'toggle_pause', payload: { paused } }).catch(() => {});
+  };
+
+  const resumeFromPauseMenu = () => {
+    setShowPauseMenu(false);
+    setPaused(false);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -85,16 +98,25 @@ export default function App() {
         event.preventDefault();
         setShowContinent((open) => !open);
       } else if (event.key === 'p' || event.key === 'P') {
-        // Sticky manual pause of the world clock (backend authoritative).
+        // Quick sticky pause of the world clock, no menu (backend authoritative).
         event.preventDefault();
         sendInput({ type: 'toggle_pause', payload: {} }).catch(() => {});
       } else if (event.key === 'Escape') {
-        setShowContinent(false);
+        event.preventDefault();
+        // Esc closes the continent map first if it's up; otherwise it toggles
+        // the pause menu (which freezes / releases the world clock).
+        if (showContinent) {
+          setShowContinent(false);
+        } else {
+          const next = !showPauseMenu;
+          setShowPauseMenu(next);
+          setPaused(next);
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [showContinent, showPauseMenu]);
 
   const openDialogue = async (npc) => {
     // Tell the backend the dialogue window is open: the world clock freezes
@@ -191,7 +213,7 @@ export default function App() {
     <div style={styles.shell}>
       <div style={styles.canvasPanel}>
         <GameCanvas gameState={visibleState} onNpcClick={openDialogue} />
-        {gameState.manually_paused ? (
+        {gameState.manually_paused && !showPauseMenu ? (
           <div style={styles.pauseOverlay}>
             <div style={styles.pauseMenu}>
               <div style={styles.pauseTitle}>⏸ Paused</div>
@@ -208,10 +230,11 @@ export default function App() {
       </div>
       <div style={styles.sidebar}>
         <HUD gameState={visibleState} />
-        <div style={styles.hint}>Press M for the continent map · R toggles fog · P pauses time</div>
+        <div style={styles.hint}>Esc menu · M map · R fog · P pause</div>
       </div>
       <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={closeDialogue} />
       {showContinent ? <ContinentOverlay onClose={() => setShowContinent(false)} /> : null}
+      <PauseMenu open={showPauseMenu} onResume={resumeFromPauseMenu} />
     </div>
   );
 }
