@@ -15,7 +15,10 @@ export const TILE_ATLAS = {
   stone_path: { src: '/assets/tiles/road.png', sx: 16, sy: 128 },
   building_floor: { src: '/assets/tiles/floors.png', sx: 16, sy: 16 },
   building_wall: { src: '/assets/tiles/walls.png', sx: 192, sy: 192 },
-  water: { src: '/assets/tiles/water.png', sx: 96, sy: 128 },
+  // Open-water cell (no shoreline sand), picked by scanning the Fan-tasy water
+  // sheet for a fully-opaque, sand-free, lightly-rippled tile; the river layers
+  // a slow shimmer over this in GameCanvas.
+  water: { src: '/assets/tiles/water.png', sx: 304, sy: 128 },
 };
 
 export const TILE_FALLBACK = { color: '#5c8c48' };

@@ -21,29 +21,27 @@ const VIEW_ROWS = 19;
 const CANVAS_W = VIEW_COLS * DISPLAY_TILE;
 const CANVAS_H = VIEW_ROWS * DISPLAY_TILE;
 
-// NPCs glide toward their authoritative tile over roughly one poll interval, so
-// stepping reads as walking. Backend stays the source of truth for position;
-// this only governs how the drawn dot catches up to it.
-const LERP_MS = 500;
+// Per-entity glide durations. The player snaps quickly so input feels direct;
+// simulated NPCs step one tile/second on the backend, so a ~1s glide makes a
+// walking villager flow continuously tile-to-tile instead of step-pausing.
+const PLAYER_LERP_MS = 110;
+const NPC_LERP_MS = 950;
+// After the player stops driving, reconcile the predicted position back to the
+// backend's authoritative tile (covers any dropped move intent).
+const RECONCILE_IDLE_MS = 400;
 
-// Pixel extent of the world, derived from the tiles the backend sent.
-function worldTileExtent(tiles) {
-  let cols = 0;
-  let rows = 0;
-  for (const tile of tiles) {
-    if (tile.x + 1 > cols) cols = tile.x + 1;
-    if (tile.y + 1 > rows) rows = tile.y + 1;
-  }
-  return { cols: cols || VIEW_COLS, rows: rows || VIEW_ROWS };
-}
+const MOVE_DELTAS = {
+  up: [0, -1],
+  down: [0, 1],
+  left: [-1, 0],
+  right: [1, 0],
+};
 
-// Clamp the camera so it follows the focus point but never scrolls past the
-// world edges. If the world is smaller than the viewport, it is centered.
-function cameraOrigin(focusPx, worldPx, viewPx) {
-  if (worldPx <= viewPx) {
-    return (worldPx - viewPx) / 2;
-  }
-  return Math.max(0, Math.min(focusPx - viewPx / 2, worldPx - viewPx));
+// Mirror of the backend's tile.passable for the tiles we draw: only water and
+// building walls block. Used purely to validate optimistic player moves so a
+// prediction can never disagree with what the backend will accept.
+function passableType(type) {
+  return type !== undefined && type !== 'water' && type !== 'building_wall';
 }
 
 const characterId = (c) => c.id ?? c.npc_id;
@@ -70,14 +68,27 @@ function makeStreaks(count) {
 }
 const RAIN_STREAKS = makeStreaks(150);
 
+// Decoration on-screen size, in tiles tall, with width derived from each
+// (trimmed) sprite's own aspect so nothing is squashed. Trees stand well above
+// their tile so the town reads with depth.
+const DECORATION_TILES_TALL = { tree: 1.9, bush: 0.85, rock: 0.8 };
+
 export default function GameCanvas({ gameState, onNpcClick }) {
   const canvasRef = useRef(null);
   const imagesRef = useRef({});
   const [imagesReady, setImagesReady] = useState(false);
-  // Latest payload, read by the animation loop without re-subscribing it.
+  // Latest payload + derived lookups, read by the animation loop and the
+  // keyboard handler without re-subscribing them every poll.
   const gameStateRef = useRef(gameState);
-  // Per-character interpolation state: id -> {fromX,fromY,toX,toY,t0,x,y}.
+  const tileMapRef = useRef(new Map()); // "x,y" -> tile_type
+  const fogMapRef = useRef(new Map()); // "x,y" -> fog_tier
+  const dimsRef = useRef({ cols: VIEW_COLS, rows: VIEW_ROWS });
+  // Per-character interpolation: id -> {fromX,fromY,toX,toY,t0,x,y,dur,isPlayer}.
   const posRef = useRef(new Map());
+  // Optimistic player tile: where we've told the player they are, ahead of the
+  // next poll. Reconciled against the authoritative position once idle.
+  const predictRef = useRef(null);
+  const lastMoveAtRef = useRef(0);
 
   // Preload every atlas image once. A redraw is triggered via imagesReady.
   useEffect(() => {
@@ -108,38 +119,75 @@ export default function GameCanvas({ gameState, onNpcClick }) {
     };
   }, []);
 
-  // On each poll, refresh the latest state and retarget the glide for every
-  // character: it starts from where it is currently drawn and eases to the new
-  // authoritative tile. New NPCs snap into place; departed NPCs are dropped.
+  // On each poll: refresh derived lookups and retarget every character's glide.
+  // NPCs ease toward their new authoritative tile; the player keeps its
+  // optimistic target unless the backend has caught up or the player went idle.
   useEffect(() => {
     gameStateRef.current = gameState;
     const now = performance.now();
     const positions = posRef.current;
-    const seen = new Set();
 
-    const characters = [...(gameState.npcs ?? [])];
-    if (gameState.player) {
-      characters.push({ ...gameState.player, id: gameState.player.npc_id });
+    const tiles = gameState.tiles ?? [];
+    const tileMap = new Map();
+    let cols = 0;
+    let rows = 0;
+    for (const tile of tiles) {
+      tileMap.set(`${tile.x},${tile.y}`, tile.tile_type);
+      if (tile.x + 1 > cols) cols = tile.x + 1;
+      if (tile.y + 1 > rows) rows = tile.y + 1;
     }
-    for (const character of characters) {
-      const id = characterId(character);
-      if (id === undefined) continue;
-      seen.add(id);
-      const tx = character.x;
-      const ty = character.y;
+    tileMapRef.current = tileMap;
+    dimsRef.current = { cols: cols || VIEW_COLS, rows: rows || VIEW_ROWS };
+    const fogMap = new Map();
+    for (const cell of gameState.fog_map ?? []) {
+      fogMap.set(`${cell.x},${cell.y}`, cell.fog_tier);
+    }
+    fogMapRef.current = fogMap;
+
+    const retarget = (id, tx, ty, dur, isPlayer) => {
       const prev = positions.get(id);
       if (!prev) {
-        positions.set(id, { fromX: tx, fromY: ty, toX: tx, toY: ty, t0: now, x: tx, y: ty });
+        positions.set(id, { fromX: tx, fromY: ty, toX: tx, toY: ty, t0: now, x: tx, y: ty, dur, isPlayer });
       } else if (prev.toX !== tx || prev.toY !== ty) {
-        positions.set(id, { fromX: prev.x, fromY: prev.y, toX: tx, toY: ty, t0: now, x: prev.x, y: prev.y });
+        positions.set(id, { fromX: prev.x, fromY: prev.y, toX: tx, toY: ty, t0: now, x: prev.x, y: prev.y, dur, isPlayer });
+      } else {
+        prev.dur = dur;
+        prev.isPlayer = isPlayer;
+      }
+    };
+
+    const seen = new Set();
+    for (const npc of gameState.npcs ?? []) {
+      const id = characterId(npc);
+      if (id === undefined) continue;
+      seen.add(id);
+      retarget(id, npc.x, npc.y, NPC_LERP_MS, false);
+    }
+
+    const player = gameState.player;
+    if (player) {
+      const id = player.npc_id;
+      seen.add(id);
+      const auth = { x: player.x, y: player.y };
+      const pred = predictRef.current;
+      if (!pred || (pred.x === auth.x && pred.y === auth.y)) {
+        predictRef.current = auth; // in sync
+        retarget(id, auth.x, auth.y, PLAYER_LERP_MS, true);
+      } else if (now - lastMoveAtRef.current > RECONCILE_IDLE_MS) {
+        predictRef.current = auth; // player idle: trust the backend again
+        retarget(id, auth.x, auth.y, PLAYER_LERP_MS, true);
+      } else if (!positions.has(id)) {
+        positions.set(id, { fromX: pred.x, fromY: pred.y, toX: pred.x, toY: pred.y, t0: now, x: pred.x, y: pred.y, dur: PLAYER_LERP_MS, isPlayer: true });
       }
     }
+
     for (const id of [...positions.keys()]) {
       if (!seen.has(id)) positions.delete(id);
     }
   }, [gameState]);
 
-  // Single animation loop: advances the glide, animates water/weather, redraws.
+  // Single animation loop: advances each glide by its own duration, animates
+  // water/weather, redraws. Runs continuously for smooth motion + effects.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return undefined;
@@ -153,11 +201,15 @@ export default function GameCanvas({ gameState, onNpcClick }) {
       if (!running) return;
       const positions = posRef.current;
       for (const entry of positions.values()) {
-        const t = Math.min(1, (now - entry.t0) / LERP_MS);
+        const dur = entry.dur || NPC_LERP_MS;
+        const t = Math.min(1, (now - entry.t0) / dur);
         entry.x = entry.fromX + (entry.toX - entry.fromX) * t;
         entry.y = entry.fromY + (entry.toY - entry.fromY) * t;
       }
-      drawScene(ctx, imagesRef.current, gameStateRef.current, positions, now);
+      drawScene(
+        ctx, imagesRef.current, gameStateRef.current, positions,
+        tileMapRef.current, fogMapRef.current, dimsRef.current, now,
+      );
       requestAnimationFrame(frame);
     };
     const handle = requestAnimationFrame(frame);
@@ -172,21 +224,42 @@ export default function GameCanvas({ gameState, onNpcClick }) {
       // Arrow keys steer the player, not the dialogue input's cursor.
       const tag = event.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-      const directionMap = {
-        ArrowUp: 'up',
-        ArrowDown: 'down',
-        ArrowLeft: 'left',
-        ArrowRight: 'right',
-      };
       // Debug demo toggle: 'r' reveals the whole map (fog on/off) backend-side.
       if (event.key === 'r' || event.key === 'R') {
         event.preventDefault();
         sendInput({ type: 'toggle_reveal', payload: {} }).catch(() => {});
         return;
       }
+      const directionMap = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right' };
       const direction = directionMap[event.key];
       if (!direction) return;
       event.preventDefault();
+
+      // Optimistic move: glide the player immediately toward the next tile if it
+      // is passable (same rule the backend uses), then post the intent. The
+      // backend stays authoritative; the next poll reconciles. This removes the
+      // up-to-one-poll input lag that made stepping feel rigid.
+      const player = gameStateRef.current?.player;
+      if (player) {
+        const base = predictRef.current ?? { x: player.x, y: player.y };
+        const [dx, dy] = MOVE_DELTAS[direction];
+        const nx = base.x + dx;
+        const ny = base.y + dy;
+        const { cols, rows } = dimsRef.current;
+        const inBounds = nx >= 0 && ny >= 0 && nx < cols && ny < rows;
+        if (inBounds && passableType(tileMapRef.current.get(`${nx},${ny}`))) {
+          predictRef.current = { x: nx, y: ny };
+          lastMoveAtRef.current = performance.now();
+          const id = player.npc_id;
+          const e = posRef.current.get(id);
+          const fromX = e ? e.x : base.x;
+          const fromY = e ? e.y : base.y;
+          posRef.current.set(id, {
+            fromX, fromY, toX: nx, toY: ny, t0: performance.now(), x: fromX, y: fromY,
+            dur: PLAYER_LERP_MS, isPlayer: true,
+          });
+        }
+      }
       sendInput({ type: 'move', payload: { direction } }).catch(() => {});
     };
     window.addEventListener('keydown', onKeyDown);
@@ -200,7 +273,7 @@ export default function GameCanvas({ gameState, onNpcClick }) {
     const tiles = gs.tiles ?? [];
     if (tiles.length === 0) return;
 
-    const { cols, rows } = worldTileExtent(tiles);
+    const { cols, rows } = dimsRef.current;
     const focus = gs.player ?? { x: cols / 2, y: rows / 2 };
     const camX = cameraOrigin((focus.x + 0.5) * DISPLAY_TILE, cols * DISPLAY_TILE, CANVAS_W);
     const camY = cameraOrigin((focus.y + 0.5) * DISPLAY_TILE, rows * DISPLAY_TILE, CANVAS_H);
@@ -235,13 +308,21 @@ export default function GameCanvas({ gameState, onNpcClick }) {
   );
 }
 
-function drawScene(ctx, images, gameState, positions, now) {
+// Clamp the camera so it follows the focus point but never scrolls past the
+// world edges. If the world is smaller than the viewport, it is centered.
+function cameraOrigin(focusPx, worldPx, viewPx) {
+  if (worldPx <= viewPx) {
+    return (worldPx - viewPx) / 2;
+  }
+  return Math.max(0, Math.min(focusPx - viewPx / 2, worldPx - viewPx));
+}
+
+function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now) {
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = '#10131a';
   ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  const tiles = gameState.tiles ?? [];
-  if (tiles.length === 0) {
+  if ((gameState.tiles ?? []).length === 0) {
     ctx.fillStyle = '#f5f5f5';
     ctx.font = '20px sans-serif';
     ctx.textAlign = 'center';
@@ -249,33 +330,17 @@ function drawScene(ctx, images, gameState, positions, now) {
     return;
   }
 
-  const { cols, rows } = worldTileExtent(tiles);
+  const { cols, rows } = dims;
   const worldW = cols * DISPLAY_TILE;
   const worldH = rows * DISPLAY_TILE;
 
-  // Camera follows the player's *interpolated* position so the scroll is as
-  // smooth as the NPC glide (falls back to the raw tile, then world center).
+  // Camera follows the player's interpolated position so the scroll is as
+  // smooth as the glide (falls back to the raw tile, then world center).
   const playerId = gameState.player?.npc_id;
   const playerPos = playerId !== undefined ? positions.get(playerId) : undefined;
   const focus = playerPos ?? gameState.player ?? { x: cols / 2, y: rows / 2 };
-  const focusX = (focus.x + 0.5) * DISPLAY_TILE;
-  const focusY = (focus.y + 0.5) * DISPLAY_TILE;
-  const camX = cameraOrigin(focusX, worldW, CANVAS_W);
-  const camY = cameraOrigin(focusY, worldH, CANVAS_H);
-
-  // tile_type lookup by coordinate (tiles arrive as a flat list).
-  const tileMap = new Map();
-  for (const tile of tiles) {
-    tileMap.set(`${tile.x},${tile.y}`, tile.tile_type);
-  }
-
-  // Fog of war: the backend is authoritative. fog_map lists only non-visible
-  // tiles ('explored' = dimmed, 'unexplored' = black); any tile absent from it
-  // is fully visible. The frontend just paints what it is told.
-  const fogMap = new Map();
-  for (const cell of gameState.fog_map ?? []) {
-    fogMap.set(`${cell.x},${cell.y}`, cell.fog_tier);
-  }
+  const camX = cameraOrigin((focus.x + 0.5) * DISPLAY_TILE, worldW, CANVAS_W);
+  const camY = cameraOrigin((focus.y + 0.5) * DISPLAY_TILE, worldH, CANVAS_H);
 
   const startCol = Math.max(0, Math.floor(camX / DISPLAY_TILE));
   const startRow = Math.max(0, Math.floor(camY / DISPLAY_TILE));
@@ -292,14 +357,13 @@ function drawScene(ctx, images, gameState, positions, now) {
       drawTile(ctx, images, type, screenX, screenY);
       if (type === 'water') {
         const phase = Math.sin(now / 900 + tx * 0.6 + ty * 0.9);
-        ctx.fillStyle = `rgba(96, 174, 214, ${0.08 + 0.09 * (0.5 + 0.5 * phase)})`;
+        ctx.fillStyle = `rgba(120, 196, 226, ${0.10 + 0.12 * (0.5 + 0.5 * phase)})`;
         ctx.fillRect(screenX, screenY, DISPLAY_TILE, DISPLAY_TILE);
       }
     }
   }
 
-  // Decoration scatter (static, beneath characters). Trees rise a little above
-  // their tile so the town reads with depth.
+  // Decoration scatter (static, beneath characters), aspect-correct + sized up.
   for (const dec of gameState.decorations ?? []) {
     if (dec.x < startCol - 1 || dec.x > endCol + 1 || dec.y < startRow - 1 || dec.y > endRow + 1) {
       continue;
@@ -310,11 +374,9 @@ function drawScene(ctx, images, gameState, positions, now) {
   // Building sprites blitted over their footprint, above tiles, beneath
   // characters. The wall/floor tiles already drawn remain the fallback.
   for (const building of gameState.buildings ?? []) {
-    const bx = building.x;
-    const by = building.y;
     const bw = building.width ?? 1;
     const bh = building.height ?? 1;
-    if (bx > endCol + 1 || bx + bw < startCol - 1 || by > endRow + 1 || by + bh < startRow - 1) {
+    if (building.x > endCol + 1 || building.x + bw < startCol - 1 || building.y > endRow + 1 || building.y + bh < startRow - 1) {
       continue;
     }
     drawBuilding(ctx, images, building, camX, camY);
@@ -389,6 +451,8 @@ function drawBuilding(ctx, images, building, camX, camY) {
   const entry = BUILDING_ATLAS[building.building_type];
   const image = entry ? images[entry.src] : undefined;
   if (!image) return; // wall/floor tiles remain the fallback
+  // The sprite is pre-trimmed to its art, so filling the footprint reads as the
+  // building sitting on its plot (no transparent padding, no neighbor spill).
   const drawW = building.width * DISPLAY_TILE;
   const drawH = building.height * DISPLAY_TILE;
   const screenX = Math.round(building.x * DISPLAY_TILE - camX);
@@ -400,12 +464,15 @@ function drawDecoration(ctx, images, dec, camX, camY) {
   const entry = DECORATION_ATLAS[dec.decoration_type];
   const image = entry ? images[entry.src] : undefined;
   if (!image) return;
-  // Anchor to the tile base; trees stand a touch taller than their tile.
-  const drawW = DISPLAY_TILE;
-  const drawH = DISPLAY_TILE * (dec.decoration_type === 'tree' ? 1.2 : 1.0);
-  const screenX = Math.round(dec.x * DISPLAY_TILE - camX);
+  // Preserve the trimmed sprite's aspect; size by a per-type target height so
+  // trees read tall and rocks stay low. Anchored at the tile base, centered.
+  const tilesTall = DECORATION_TILES_TALL[dec.decoration_type] ?? 1.0;
+  const drawH = tilesTall * DISPLAY_TILE;
+  const aspect = image.naturalWidth / image.naturalHeight || 1;
+  const drawW = drawH * aspect;
+  const centerX = (dec.x + 0.5) * DISPLAY_TILE - camX;
   const feetY = (dec.y + 1) * DISPLAY_TILE - camY;
-  ctx.drawImage(image, screenX, Math.round(feetY - drawH), drawW, drawH);
+  ctx.drawImage(image, Math.round(centerX - drawW / 2), Math.round(feetY - drawH), drawW, drawH);
 }
 
 function drawCharacter(ctx, images, character, worldX, worldY, camX, camY) {

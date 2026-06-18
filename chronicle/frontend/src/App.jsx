@@ -64,7 +64,9 @@ export default function App() {
     };
 
     loadState();
-    const intervalId = window.setInterval(loadState, 500);
+    // Poll fast (200ms) so player input latency and NPC retargeting stay tight;
+    // the canvas itself redraws every animation frame and tweens between polls.
+    const intervalId = window.setInterval(loadState, 200);
 
     return () => {
       cancelled = true;
