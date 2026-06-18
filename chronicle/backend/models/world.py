@@ -85,8 +85,11 @@ class RenderPayload(BaseModel):
     # recent decisions for the HUD.
     rumors: list[str] = Field(default_factory=list)
     demon_lord_decisions: list[str] = Field(default_factory=list)
-    # True while the world clock holds still (dialogue open / daily decision).
+    # True while the world clock holds still (dialogue open / daily decision /
+    # manual pause). `manually_paused` isolates the sticky demo pause so the UI
+    # can show a distinct paused state and a Resume control.
     world_paused: bool = False
+    manually_paused: bool = False
     # Demo: which LLM backs conversations now, how long the last call took, and
     # whether the Azure provider is configured (gates the toggle in the UI).
     llm_provider: str = "local"

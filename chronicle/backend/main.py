@@ -92,6 +92,11 @@ _tick_rng = random.Random()
 FOG_REVEAL_RADIUS = 11.0
 # Debug demo toggle (press 'R'): reveal the whole map regardless of exploration.
 _reveal_all = False
+# Manual pause (press 'P' / pause button): a sticky hold on the world clock,
+# independent of the rolling dialogue/decision freeze. Stays set until toggled
+# off, so a presenter can stop time, talk through the scene, then resume. The
+# player can still walk a paused town (movement never rides the tick).
+_manual_pause = False
 
 # Serializes simulation writes. The tick functions load-mutate-save NPC dicts
 # on a worker thread; any other writer that touches simulated NPC state (the
@@ -280,10 +285,11 @@ def _conversation_finished() -> None:
 
 def _world_frozen() -> bool:
     """True while the world clock should hold still (stability over liveness):
-    a conversation turn in flight, an open dialogue window, or the Demon
-    Lord's daily decision being generated."""
+    a manual pause, a conversation turn in flight, an open dialogue window, or
+    the Demon Lord's daily decision being generated."""
     return (
-        _demon_lord_deciding.is_set()
+        _manual_pause
+        or _demon_lord_deciding.is_set()
         or _active_conversations > 0
         or time.monotonic() < _dialogue_freeze_until
     )
@@ -749,6 +755,7 @@ def _build_render_payload() -> RenderPayload:
         rumors=rumor_lines,
         demon_lord_decisions=decision_lines,
         world_paused=_world_frozen(),
+        manually_paused=_manual_pause,
         llm_provider=conversation.current_provider(),
         llm_last_seconds=conversation.last_call_seconds(),
         azure_available=conversation.azure_available(),
@@ -781,6 +788,16 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
         global _reveal_all
         _reveal_all = not _reveal_all
         return JSONResponse({"status": "ok", "accepted": True, "reveal_all": _reveal_all})
+
+    # Day 8 demo control: sticky manual pause of the world clock. A truthy
+    # `paused` in the payload forces a specific state; otherwise it toggles.
+    if player_input.type == "toggle_pause":
+        global _manual_pause
+        if "paused" in player_input.payload:
+            _manual_pause = bool(player_input.payload["paused"])
+        else:
+            _manual_pause = not _manual_pause
+        return JSONResponse({"status": "ok", "accepted": True, "paused": _manual_pause})
 
     # Demo toggle: switch the LLM provider (local Ollama <-> Azure OpenAI). Only
     # engages azure when it is configured; otherwise stays local.

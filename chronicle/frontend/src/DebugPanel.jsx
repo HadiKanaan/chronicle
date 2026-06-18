@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { sendDebug } from './api';
+import { sendDebug, sendInput } from './api';
 
 // Demo/debug control panel: set time and faction scores, and fire a dawn tick
 // on cue (to show the ML batch react live). Inputs use LOCAL state, snapshotted
@@ -12,6 +12,7 @@ export default function DebugPanel({ gameState }) {
   const [facValues, setFacValues] = useState({});
 
   const factionNames = Object.keys(gameState.faction_reputations ?? {});
+  const paused = Boolean(gameState.manually_paused);
 
   const openPanel = () => {
     setDay(String(gameState.current_day ?? 1));
@@ -49,6 +50,16 @@ export default function DebugPanel({ gameState }) {
 
       <div style={styles.group}>
         <div style={styles.label}>Time</div>
+        <div style={styles.row}>
+          <button
+            style={paused ? styles.btnResume : styles.btnAccent}
+            onClick={() =>
+              sendInput({ type: 'toggle_pause', payload: { paused: !paused } }).catch(() => {})
+            }
+          >
+            {paused ? '▶ Resume time' : '⏸ Pause time'}
+          </button>
+        </div>
         <div style={styles.row}>
           <label style={styles.inline}>
             Day <input style={styles.num} value={day} onChange={(e) => setDay(e.target.value)} />
@@ -178,6 +189,15 @@ const styles = {
     background: '#3a2f12',
     color: '#f0d9a0',
     border: '1px solid #6b5520',
+    borderRadius: '4px',
+    padding: '2px 10px',
+    cursor: 'pointer',
+    fontSize: '12px'
+  },
+  btnResume: {
+    background: '#12233a',
+    color: '#a8c7f0',
+    border: '1px solid #4a76c4',
     borderRadius: '4px',
     padding: '2px 10px',
     cursor: 'pointer',

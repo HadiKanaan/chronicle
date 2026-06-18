@@ -18,7 +18,8 @@ const EMPTY_STATE = {
   current_hour: 6,
   fog_map: [],
   buildings: [],
-  decorations: []
+  decorations: [],
+  manually_paused: false
 };
 
 export default function App() {
@@ -83,6 +84,10 @@ export default function App() {
       if (event.key === 'm' || event.key === 'M') {
         event.preventDefault();
         setShowContinent((open) => !open);
+      } else if (event.key === 'p' || event.key === 'P') {
+        // Sticky manual pause of the world clock (backend authoritative).
+        event.preventDefault();
+        sendInput({ type: 'toggle_pause', payload: {} }).catch(() => {});
       } else if (event.key === 'Escape') {
         setShowContinent(false);
       }
@@ -186,10 +191,24 @@ export default function App() {
     <div style={styles.shell}>
       <div style={styles.canvasPanel}>
         <GameCanvas gameState={visibleState} onNpcClick={openDialogue} />
+        {gameState.manually_paused ? (
+          <div style={styles.pauseOverlay}>
+            <div style={styles.pauseMenu}>
+              <div style={styles.pauseTitle}>⏸ Paused</div>
+              <div style={styles.pauseHint}>The world clock is held. You can still walk around.</div>
+              <button
+                style={styles.resumeBtn}
+                onClick={() => sendInput({ type: 'toggle_pause', payload: { paused: false } }).catch(() => {})}
+              >
+                ▶ Resume (P)
+              </button>
+            </div>
+          </div>
+        ) : null}
       </div>
       <div style={styles.sidebar}>
         <HUD gameState={visibleState} />
-        <div style={styles.hint}>Press M for the continent map · R toggles fog</div>
+        <div style={styles.hint}>Press M for the continent map · R toggles fog · P pauses time</div>
       </div>
       <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={closeDialogue} />
       {showContinent ? <ContinentOverlay onClose={() => setShowContinent(false)} /> : null}
@@ -209,7 +228,46 @@ const styles = {
     boxSizing: 'border-box'
   },
   canvasPanel: {
-    minHeight: '0'
+    minHeight: '0',
+    position: 'relative'
+  },
+  pauseOverlay: {
+    position: 'absolute',
+    inset: 0,
+    display: 'flex',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    paddingTop: '24px',
+    background: 'rgba(10, 13, 20, 0.32)',
+    pointerEvents: 'none'
+  },
+  pauseMenu: {
+    pointerEvents: 'auto',
+    background: 'rgba(21, 25, 33, 0.94)',
+    border: '1px solid #39414d',
+    borderRadius: '8px',
+    padding: '16px 20px',
+    textAlign: 'center',
+    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)'
+  },
+  pauseTitle: {
+    fontSize: '20px',
+    color: '#8ab4f8',
+    marginBottom: '4px'
+  },
+  pauseHint: {
+    fontSize: '12px',
+    color: '#9ca3af',
+    marginBottom: '12px'
+  },
+  resumeBtn: {
+    background: '#222833',
+    color: '#f5f5f5',
+    border: '1px solid #4a76c4',
+    borderRadius: '5px',
+    padding: '6px 16px',
+    cursor: 'pointer',
+    fontSize: '13px'
   },
   sidebar: {
     minHeight: '0'

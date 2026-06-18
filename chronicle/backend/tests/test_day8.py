@@ -134,3 +134,32 @@ def test_render_payload_includes_buildings_and_decorations(temp_db):
     }
     # Simulation-only fields must NOT leak into the display dict.
     assert "id" not in building and "owner_npc_id" not in building
+
+
+# --------------------------------------------------------------------------- #
+# Manual pause - sticky hold on the world clock, surfaced for the UI
+# --------------------------------------------------------------------------- #
+def test_manual_pause_freezes_clock_and_surfaces_in_payload(temp_db):
+    region = _mixed_region(6, 6)
+    temp_db.save_world_state(
+        {"game_started": True, "current_day": 1, "current_hour": 6,
+         "player_npc_id": None, "region": region}
+    )
+
+    import main
+    # A clean world with no dialogue/decision in flight is not frozen.
+    main._manual_pause = False
+    main._dialogue_freeze_until = 0.0
+    try:
+        assert main._world_frozen() is False
+        assert main._build_render_payload().manually_paused is False
+
+        # Engaging the manual pause both freezes the tick loop and shows up in
+        # the payload so the UI can render a paused state + Resume control.
+        main._manual_pause = True
+        assert main._world_frozen() is True
+        payload = main._build_render_payload()
+        assert payload.manually_paused is True
+        assert payload.world_paused is True
+    finally:
+        main._manual_pause = False
