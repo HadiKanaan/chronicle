@@ -31,6 +31,7 @@ from database import (
     get_npcs_by_tier,
     get_recent_log,
     get_region_decorations,
+    get_region_paths,
     get_world_state,
     init_db,
     log_event,
@@ -40,6 +41,7 @@ from database import (
     save_npc,
     save_npcs,
     save_region_decorations,
+    save_region_paths,
     save_rumor,
     save_world_state,
     world_is_generated,
@@ -52,6 +54,7 @@ from systems import (
     decorations,
     demon_lord,
     factions,
+    paths,
     relationships,
     rumors,
     weather,
@@ -391,6 +394,31 @@ def _ensure_decorations() -> None:
         )
 
 
+def _ensure_paths() -> None:
+    """Generate the static road network ONCE for the live world (Day 8).
+
+    Idempotent and non-destructive, exactly like _ensure_decorations: if paths
+    are already persisted it returns immediately, so an existing world is never
+    regenerated and the roads stay stable. Otherwise it routes a connected dirt
+    network between building doors and folds it into region_static.
+    """
+    with _sim_lock:
+        if get_region_paths():
+            return
+        state = get_world_state()
+        if not state:
+            return
+        region = state.get("region")
+        if not isinstance(region, dict) or not region.get("tiles"):
+            return
+        network = paths.generate_paths(region)
+        save_region_paths(network)
+        log_event(
+            int(state.get("current_day", 1)), int(state.get("current_hour", 6)),
+            "paths", f"Path network generated: {len(network)} road tiles.",
+        )
+
+
 def _advance_one_move_step() -> None:
     """Pop one cached path step per NPC (movement sub-tick, no clock change)."""
     with _sim_lock:
@@ -477,8 +505,10 @@ async def lifespan(_app: FastAPI):
         )
     # Day 6: the antagonist joins the live world in place; never regenerate.
     _ensure_demon_lord()
-    # Day 8: generate the static visual decoration layer once (idempotent).
+    # Day 8: generate the static visual decoration layer + road network once
+    # (both idempotent).
     _ensure_decorations()
+    _ensure_paths()
     tick_task = asyncio.create_task(_world_tick_loop()) if TICK_ENABLED else None
     # Day 5: warm the conversation model and flesh out Tier 1 cards without
     # blocking startup; daemon so it never holds up shutdown.
@@ -737,6 +767,7 @@ def _build_render_payload() -> RenderPayload:
         for b in region.buildings
     ]
     decorations = get_region_decorations()
+    road_tiles = get_region_paths()
     all_factions = get_all_factions()
     # Day 7: reputation now means the faction's regard for the PLAYER (player-
     # driven); morale is its own cohesion/wellbeing (what the Demon Lord erodes).
@@ -781,6 +812,7 @@ def _build_render_payload() -> RenderPayload:
         fog_map=fog_map,
         buildings=buildings,
         decorations=decorations,
+        paths=road_tiles,
         rumors=rumor_lines,
         demon_lord_decisions=decision_lines,
         world_paused=_world_frozen(),
@@ -1059,6 +1091,7 @@ def generate_world() -> JSONResponse:
     summary = world_gen.generate_world()
     _ensure_demon_lord()
     _ensure_decorations()
+    _ensure_paths()
     return JSONResponse({"status": "generated", **summary})
 
 

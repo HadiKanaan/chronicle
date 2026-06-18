@@ -161,6 +161,27 @@ def save_region_decorations(decorations: list[dict[str, Any]]) -> None:
         )
 
 
+def get_region_paths() -> list[dict[str, Any]]:
+    """The persisted static road network (Day 8), or [] if not generated. Like
+    decorations these live in region_static (write-once, visual-only)."""
+    static = get_region_static()
+    if not static:
+        return []
+    return static.get("paths") or []
+
+
+def save_region_paths(paths: list[dict[str, Any]]) -> None:
+    """Fold the path network into region_static without rewriting the tile grid,
+    buildings, or decorations already stored there."""
+    static = get_region_static() or {}
+    static["paths"] = paths
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO region_static (id, data) VALUES (1, ?)",
+            (_dumps(static),),
+        )
+
+
 def get_world_state() -> Optional[dict[str, Any]]:
     with _connect() as connection:
         row = connection.execute(

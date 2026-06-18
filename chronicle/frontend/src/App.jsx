@@ -20,6 +20,7 @@ const EMPTY_STATE = {
   fog_map: [],
   buildings: [],
   decorations: [],
+  paths: [],
   manually_paused: false
 };
 

@@ -23,6 +23,12 @@ export const TILE_ATLAS = {
 
 export const TILE_FALLBACK = { color: '#5c8c48' };
 
+// Dirt road tile from the kenney medieval-RTS spritesheet (the solid-dirt cell
+// at 320,64 in the 550x550 sheet, 64px source). Drawn on each generated path
+// tile to lay roads between buildings. `size` is the source cell size (64), not
+// the 16px Fan-tasy terrain tiles.
+export const PATH_TILE = { src: '/assets/tiles/kenney_rts.png', sx: 320, sy: 64, size: 64 };
+
 // building_type -> a single front-view structure sprite (Kenney medieval-RTS).
 // The renderer blits one sprite over each building's footprint, above the
 // wall/floor tiles (which remain the fallback when a sprite is missing). Each
@@ -86,5 +92,6 @@ export function allImageSources() {
     if (entry.src) sources.add(entry.src);
   }
   if (DOOR_SPRITE.src) sources.add(DOOR_SPRITE.src);
+  if (PATH_TILE.src) sources.add(PATH_TILE.src);
   return [...sources];
 }

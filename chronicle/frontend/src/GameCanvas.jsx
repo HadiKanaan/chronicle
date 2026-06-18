@@ -4,6 +4,7 @@ import {
   SOURCE_TILE,
   TILE_ATLAS,
   TILE_FALLBACK,
+  PATH_TILE,
   BUILDING_ATLAS,
   DOOR_SPRITE,
   DECORATION_ATLAS,
@@ -364,8 +365,23 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     }
   }
 
+  // Road network (static), drawn over the base ground and under everything
+  // else. The full tile set is collected first so decorations yield to roads
+  // (no tree sitting in the middle of a path).
+  const pathImg = images[PATH_TILE.src];
+  const pathSet = new Set();
+  for (const road of gameState.paths ?? []) {
+    pathSet.add(`${road.x},${road.y}`);
+    if (road.x < startCol - 1 || road.x > endCol + 1 || road.y < startRow - 1 || road.y > endRow + 1) continue;
+    if (!pathImg) continue;
+    const screenX = Math.round(road.x * DISPLAY_TILE - camX);
+    const screenY = Math.round(road.y * DISPLAY_TILE - camY);
+    ctx.drawImage(pathImg, PATH_TILE.sx, PATH_TILE.sy, PATH_TILE.size, PATH_TILE.size, screenX, screenY, DISPLAY_TILE, DISPLAY_TILE);
+  }
+
   // Decoration scatter (static, beneath characters), aspect-correct + sized up.
   for (const dec of gameState.decorations ?? []) {
+    if (pathSet.has(`${dec.x},${dec.y}`)) continue; // roads take precedence
     if (dec.x < startCol - 1 || dec.x > endCol + 1 || dec.y < startRow - 1 || dec.y > endRow + 1) {
       continue;
     }

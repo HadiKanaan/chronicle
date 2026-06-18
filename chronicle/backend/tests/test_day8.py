@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from systems import decorations
+from systems import decorations, paths
 
 
 def _mixed_region(width: int = 20, height: int = 20) -> dict:
@@ -180,3 +180,70 @@ def test_display_sprite_maps_by_occupation():
     assert main._display_sprite({"occupation": "farmer"}) == "human_base"
     # A deliberately-assigned sprite (e.g. the Demon Lord) is preserved.
     assert main._display_sprite({"occupation": "warlord", "sprite_id": "npc_wizard"}) == "npc_wizard"
+
+
+# --------------------------------------------------------------------------- #
+# Path network - connects building doors over walkable ground only
+# --------------------------------------------------------------------------- #
+def _two_building_region(size: int = 16) -> dict:
+    """Open grass with two carved buildings (walls + a stone door each), so the
+    road router has two reachable entrances to connect."""
+    tiles = [
+        [{"x": x, "y": y, "tile_type": "grass", "passable": True} for x in range(size)]
+        for y in range(size)
+    ]
+    buildings = []
+    for bx, by, w, h, bid in [(2, 2, 3, 3, "bld_a"), (10, 10, 3, 3, "bld_b")]:
+        for yy in range(by, by + h):
+            for xx in range(bx, bx + w):
+                border = xx in (bx, bx + w - 1) or yy in (by, by + h - 1)
+                tiles[yy][xx]["tile_type"] = "building_wall" if border else "building_floor"
+                tiles[yy][xx]["passable"] = not border
+        dx, dy = bx + w // 2, by + h - 1
+        tiles[dy][dx]["tile_type"] = "stone_path"
+        tiles[dy][dx]["passable"] = True
+        buildings.append({"id": bid, "name": bid, "building_type": "house",
+                          "x": bx, "y": by, "width": w, "height": h, "owner_npc_id": None})
+    return {
+        "id": "region_test", "name": "Testmoor", "width": size, "height": size,
+        "biome": "temperate_forest", "tiles": tiles, "buildings": buildings,
+        "current_weather": "clear", "season": "spring",
+    }
+
+
+def test_paths_connect_doors_over_walkable_ground():
+    region = _two_building_region()
+    network = paths.generate_paths(region)
+    assert network, "expected a road network between two reachable buildings"
+
+    coords = {(p["x"], p["y"]) for p in network}
+    assert (3, 4) in coords and (11, 12) in coords  # both door tiles on the road
+
+    tile_at = {(t["x"], t["y"]): t for row in region["tiles"] for t in row}
+    for x, y in coords:
+        tile = tile_at[(x, y)]
+        assert tile["tile_type"] in {"grass", "dirt", "stone_path"}, "road off walkable ground"
+        assert tile["passable"], "road on an impassable tile"
+
+
+def test_paths_stable_across_calls():
+    region = _two_building_region()
+    assert paths.generate_paths(region) == paths.generate_paths(region)
+
+
+def test_paths_persist_and_surface_in_payload(temp_db):
+    region = _two_building_region()
+    temp_db.save_world_state(
+        {"game_started": True, "current_day": 1, "current_hour": 6,
+         "player_npc_id": None, "region": region}
+    )
+    network = paths.generate_paths(region)
+    temp_db.save_region_paths(network)
+
+    assert temp_db.get_region_paths() == network
+    # The decoration write path and the path write must not clobber each other.
+    temp_db.save_region_decorations([{"decoration_type": "tree", "x": 0, "y": 0}])
+    assert temp_db.get_region_paths() == network
+
+    import main
+    assert main._build_render_payload().paths == network
