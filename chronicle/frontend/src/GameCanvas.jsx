@@ -372,14 +372,28 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     drawDecoration(ctx, images, dec, camX, camY);
   }
 
-  // Building sprites blitted over their footprint, above tiles, beneath
-  // characters. The wall/floor tiles already drawn remain the fallback. When
-  // the player stands inside a building its roof fades to a ghost so you can
-  // see yourself within instead of standing on top of the sprite. A door sprite
-  // marks the walkable entrance tile.
+  // Depth-sorted world layer: NPCs and buildings interleave by their base row
+  // so a villager standing inside a building is hidden by its roof from the
+  // outside, while one in front of it draws over it. Buildings sort half a tile
+  // below their footprint bottom so an NPC on the entrance/wall row counts as
+  // "inside" (occluded) and one a tile south counts as "in front" (on top).
+  // NPCs on a fogged tile are hidden (fog test uses the authoritative tile).
+  // The player is NOT in this layer - it is drawn last so it stays visible;
+  // entering a building fades that roof so the player and any NPCs inside show
+  // through. The "reveal interiors" toggle fades every roof at once.
   const pTile = playerPos
     ? { x: Math.round(playerPos.x), y: Math.round(playerPos.y) }
     : (gameState.player ? { x: Math.round(gameState.player.x), y: Math.round(gameState.player.y) } : null);
+  const reveal = Boolean(gameState.revealInteriors);
+
+  const worldItems = [];
+  for (const npc of gameState.npcs ?? []) {
+    if (fogMap.has(`${Math.round(npc.x)},${Math.round(npc.y)}`)) continue;
+    const pos = positions.get(characterId(npc));
+    const drawX = pos ? pos.x : npc.x;
+    const drawY = pos ? pos.y : npc.y;
+    worldItems.push({ sortY: drawY + 1, kind: 'npc', npc, drawX, drawY });
+  }
   for (const building of gameState.buildings ?? []) {
     const bw = building.width ?? 1;
     const bh = building.height ?? 1;
@@ -389,26 +403,26 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     const inside = pTile
       && pTile.x >= building.x && pTile.x <= building.x + bw - 1
       && pTile.y >= building.y && pTile.y <= building.y + bh - 1;
-    const alpha = inside ? 0.18 : 1;
-    drawBuilding(ctx, images, building, camX, camY, alpha);
-    drawDoor(ctx, images, building, camX, camY, alpha);
+    const alpha = (inside || reveal) ? 0.18 : 1;
+    worldItems.push({ sortY: building.y + bh + 0.5, kind: 'building', building, alpha });
+  }
+  worldItems.sort((a, b) => a.sortY - b.sortY);
+  for (const item of worldItems) {
+    if (item.kind === 'npc') {
+      drawCharacter(ctx, images, item.npc, item.drawX, item.drawY, camX, camY);
+    } else {
+      drawBuilding(ctx, images, item.building, camX, camY, item.alpha);
+      drawDoor(ctx, images, item.building, camX, camY, item.alpha);
+    }
   }
 
-  // Characters: back-to-front so nearer ones overlap farther ones. NPCs on a
-  // fogged tile are hidden (fog test uses the authoritative tile); the player
-  // host is always drawn. Drawing uses the interpolated position.
-  const characters = (gameState.npcs ?? []).filter(
-    (npc) => !fogMap.has(`${Math.round(npc.x)},${Math.round(npc.y)}`)
-  );
+  // Player drawn last so it is never hidden behind a roof; the inside-fade above
+  // is what reveals it (and fellow occupants) once you step in.
   if (gameState.player) {
-    characters.push({ ...gameState.player, id: gameState.player.npc_id, isPlayer: true });
-  }
-  characters.sort((a, b) => a.y - b.y);
-  for (const character of characters) {
-    const pos = positions.get(characterId(character));
-    const drawX = pos ? pos.x : character.x;
-    const drawY = pos ? pos.y : character.y;
-    drawCharacter(ctx, images, character, drawX, drawY, camX, camY);
+    const pos = positions.get(gameState.player.npc_id);
+    const drawX = pos ? pos.x : gameState.player.x;
+    const drawY = pos ? pos.y : gameState.player.y;
+    drawCharacter(ctx, images, { ...gameState.player, isPlayer: true }, drawX, drawY, camX, camY);
   }
 
   // Fog overlays painted on top: explored tiles get a dim wash, unexplored go

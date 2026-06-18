@@ -35,6 +35,9 @@ export default function App() {
   // Full pause menu (Esc). Opening it freezes the world clock; resuming releases
   // it. Backend stays authoritative - this only posts the pause intent.
   const [showPauseMenu, setShowPauseMenu] = useState(false);
+  // Frontend-only X-ray: ghost every building roof so the NPCs inside are
+  // visible at once. Purely a render toggle (the backend never sees it).
+  const [revealInteriors, setRevealInteriors] = useState(false);
 
   const setPaused = (paused) => {
     sendInput({ type: 'toggle_pause', payload: { paused } }).catch(() => {});
@@ -103,6 +106,9 @@ export default function App() {
         // Quick sticky pause of the world clock, no menu (backend authoritative).
         event.preventDefault();
         sendInput({ type: 'toggle_pause', payload: {} }).catch(() => {});
+      } else if (event.key === 'b' || event.key === 'B') {
+        event.preventDefault();
+        setRevealInteriors((on) => !on);
       } else if (event.key === 'Escape') {
         event.preventDefault();
         // Esc closes the continent map first if it's up; otherwise it toggles
@@ -202,7 +208,8 @@ export default function App() {
 
   const visibleState = {
     ...gameState,
-    notifications
+    notifications,
+    revealInteriors
   };
 
   const closeDialogue = () => {
@@ -232,7 +239,13 @@ export default function App() {
       </div>
       <div style={styles.sidebar}>
         <HUD gameState={visibleState} />
-        <div style={styles.hint}>Esc menu · M map · R fog · P pause</div>
+        <button
+          style={revealInteriors ? styles.revealBtnOn : styles.revealBtn}
+          onClick={() => setRevealInteriors((on) => !on)}
+        >
+          {revealInteriors ? '🏠 Hide building interiors' : '🏠 Reveal building interiors'}
+        </button>
+        <div style={styles.hint}>Esc menu · M map · R fog · P pause · B interiors</div>
       </div>
       <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={closeDialogue} />
       {showContinent ? <ContinentOverlay onClose={() => setShowContinent(false)} /> : null}
@@ -297,8 +310,30 @@ const styles = {
   sidebar: {
     minHeight: '0'
   },
-  hint: {
+  revealBtn: {
     marginTop: '12px',
+    width: '100%',
+    background: '#1b2030',
+    color: '#9aa4b2',
+    border: '1px solid #39414d',
+    borderRadius: '4px',
+    padding: '8px',
+    cursor: 'pointer',
+    fontSize: '13px'
+  },
+  revealBtnOn: {
+    marginTop: '12px',
+    width: '100%',
+    background: '#12233a',
+    color: '#a8c7f0',
+    border: '1px solid #4a76c4',
+    borderRadius: '4px',
+    padding: '8px',
+    cursor: 'pointer',
+    fontSize: '13px'
+  },
+  hint: {
+    marginTop: '10px',
     color: '#6b7280',
     fontSize: '12px',
     textAlign: 'center'
