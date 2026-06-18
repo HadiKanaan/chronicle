@@ -103,6 +103,16 @@ export default function DebugPanel({ gameState }) {
           </div>
         ))}
       </div>
+
+      <div style={styles.group}>
+        <div style={styles.label}>Conversations</div>
+        <button
+          style={styles.btn}
+          onClick={() => sendDebug('clear_history').catch(() => {})}
+        >
+          Clear all NPC chat history
+        </button>
+      </div>
     </section>
   );
 }

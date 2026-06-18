@@ -139,8 +139,8 @@
 - [X] T038 [P] Implement fog-of-war tiers and visibility map output in `backend/main.py` and `frontend/src/GameCanvas.jsx` (Day 7: persisted exploration set on WorldState; three tiers computed backend-side from the host NPC each /api/state build; reveal-all debug toggle on 'R'; NE-corner lair starts unexplored)
 - [X] T039 [P] Implement full world save/load serialization in `backend/database.py` and `backend/main.py` (Day 7: split the immutable tile grid into region_static so the hourly save stays lean; verified full round-trip of all Day 5/6/7 fields)
 - [X] T040 [P] Add backend startup and shutdown persistence flow in `backend/main.py` and `backend/database.py` (Day 7: startup load via world_is_generated gate already existed; added a clean shutdown flush under _sim_lock so an in-flight tick can't lose the last state)
-- [ ] T041 [P] Document the demo flow and architecture diagram in `README.md`
-- [ ] T042 Finalize the quickstart validation notes in `specs/001-living-world-rpg/quickstart.md`
+- [X] T041 [P] Document the demo flow and architecture diagram in `README.md` (Day 7: created `chronicle/README.md` with a Mermaid architecture diagram, the ML registry, the LLM provider model, and a 10-minute demo flow)
+- [X] T042 Finalize the quickstart validation notes in `specs/001-living-world-rpg/quickstart.md` (Day 7: real run steps — uv venv, Ollama model, optional Azure .env — plus a validation checklist covering fog/continent/conversation/save-load/ML-on-cue)
 
 ---
 

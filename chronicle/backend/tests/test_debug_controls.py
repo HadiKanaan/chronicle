@@ -72,6 +72,23 @@ def test_unknown_action_is_400(temp_db):
     assert exc.value.status_code == 400
 
 
+def test_clear_history_wipes_transcripts(temp_db):
+    import main
+    _seed_state(temp_db)
+    temp_db.save_npc({"id": "npc_a", "tier": 1, "name": "A",
+                      "conversation_history": [{"player_text": "hi", "npc_response": "ho"}]})
+    temp_db.save_npc({"id": "npc_b", "tier": 1, "name": "B",
+                      "conversation_history": [{"player_text": "x", "npc_response": "y"}]})
+    # One NPC by id.
+    out = main.post_debug(main.DebugInput(action="clear_history", payload={"npc_id": "npc_a"}))
+    assert json.loads(out.body)["cleared"] == 1
+    assert temp_db.get_npc("npc_a")["conversation_history"] == []
+    assert temp_db.get_npc("npc_b")["conversation_history"] != []
+    # All NPCs when no id is given.
+    main.post_debug(main.DebugInput(action="clear_history"))
+    assert temp_db.get_npc("npc_b")["conversation_history"] == []
+
+
 def test_trigger_dawn_advances_to_dawn_and_runs_batch(temp_db, monkeypatch):
     import main
     from systems import world_gen

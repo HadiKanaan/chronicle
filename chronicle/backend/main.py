@@ -812,6 +812,22 @@ def post_debug(cmd: DebugInput) -> JSONResponse:
             save_faction(faction)
         return JSONResponse({"status": "ok", "action": action, "faction": faction.get("name")})
 
+    if action == "clear_history":
+        # Wipe NPC conversation transcripts so a demo starts clean (the history
+        # is replayed into the prompt, so a polluted transcript - e.g. from an
+        # earlier weaker model - drags the next replies with it). One NPC by id,
+        # or all when no id is given.
+        npc_id = str(payload.get("npc_id", "")).strip()
+        with _sim_lock:
+            targets = [get_npc(npc_id)] if npc_id else get_all_npcs()
+            changed: list[dict[str, Any]] = []
+            for npc in targets:
+                if npc and npc.get("conversation_history"):
+                    npc["conversation_history"] = []
+                    changed.append(npc)
+            save_npcs(changed)
+        return JSONResponse({"status": "ok", "action": action, "cleared": len(changed)})
+
     raise HTTPException(status_code=400, detail=f"Unknown debug action: {action}")
 
 
