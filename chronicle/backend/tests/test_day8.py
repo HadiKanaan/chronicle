@@ -130,7 +130,9 @@ def test_render_payload_includes_buildings_and_decorations(temp_db):
     assert payload.buildings, "payload should surface building footprints"
     building = payload.buildings[0]
     assert building == {
-        "building_type": "house", "x": 2, "y": 2, "width": 4, "height": 4
+        "building_type": "house", "x": 2, "y": 2, "width": 4, "height": 4,
+        # entrance tile = bottom-centre, matching world_gen._carve_building.
+        "door_x": 4, "door_y": 5,
     }
     # Simulation-only fields must NOT leak into the display dict.
     assert "id" not in building and "owner_npc_id" not in building
@@ -163,3 +165,18 @@ def test_manual_pause_freezes_clock_and_surfaces_in_payload(temp_db):
         assert payload.world_paused is True
     finally:
         main._manual_pause = False
+
+
+# --------------------------------------------------------------------------- #
+# NPC sprite variety - display-only mapping, no stored data mutated
+# --------------------------------------------------------------------------- #
+def test_display_sprite_maps_by_occupation():
+    import main
+    assert main._display_sprite({"occupation": "guard"}) == "npc_knight"
+    assert main._display_sprite({"occupation": "magistrate"}) == "npc_knight"
+    assert main._display_sprite({"occupation": "priest"}) == "npc_wizard"
+    assert main._display_sprite({"occupation": "merchant"}) == "npc_rogue"
+    # Unmapped roles fall back to the base villager.
+    assert main._display_sprite({"occupation": "farmer"}) == "human_base"
+    # A deliberately-assigned sprite (e.g. the Demon Lord) is preserved.
+    assert main._display_sprite({"occupation": "warlord", "sprite_id": "npc_wizard"}) == "npc_wizard"

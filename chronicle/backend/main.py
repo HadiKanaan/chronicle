@@ -641,12 +641,36 @@ def _empty_render_payload() -> RenderPayload:
     )
 
 
+# Occupation -> character sprite (display-only). Turns the all-identical crowd
+# into role-readable variety: armoured guards/magistrates, a robed priest, and
+# cloaked market folk; everyone else uses the base villager. NPCs that already
+# carry a hand-picked sprite (e.g. the Demon Lord) keep it.
+_OCC_SPRITE = {
+    "guard": "npc_knight",
+    "guard_captain": "npc_knight",
+    "magistrate": "npc_knight",
+    "priest": "npc_wizard",
+    "herbalist": "npc_wizard",
+    "merchant": "npc_rogue",
+    "trader": "npc_rogue",
+    "tavern_keeper": "npc_rogue",
+    "courier": "npc_rogue",
+}
+
+
+def _display_sprite(npc: dict[str, Any]) -> str:
+    stored = npc.get("sprite_id", "human_base")
+    if stored and stored != "human_base":
+        return stored  # respect a deliberately-assigned sprite (Demon Lord etc.)
+    return _OCC_SPRITE.get(npc.get("occupation", ""), "human_base")
+
+
 def _visible_npc_summary(npc: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": npc.get("id"),
         "x": npc.get("x", 0),
         "y": npc.get("y", 0),
-        "sprite_id": npc.get("sprite_id", "human_base"),
+        "sprite_id": _display_sprite(npc),
         "name": npc.get("name", "Unknown"),
         "tier": npc.get("tier", 3),
         # Day 4: behavior and mood summaries so the renderer can show why NPCs
@@ -704,6 +728,11 @@ def _build_render_payload() -> RenderPayload:
             "y": b.y,
             "width": b.width,
             "height": b.height,
+            # The passable entrance tile (bottom-centre), mirrored from
+            # world_gen._carve_building so the renderer can mark the doorway
+            # exactly where the walkable gap is.
+            "door_x": b.x + b.width // 2,
+            "door_y": b.y + b.height - 1,
         }
         for b in region.buildings
     ]

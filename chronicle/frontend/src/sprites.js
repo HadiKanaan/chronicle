@@ -36,6 +36,11 @@ export const BUILDING_ATLAS = {
   house: { src: '/assets/buildings/house.png' },
 };
 
+// A wooden door drawn over each building's entrance tile so the (walkable) gap
+// in the wall reads as a doorway. Fades out with the building when the player
+// is inside.
+export const DOOR_SPRITE = { src: '/assets/buildings/door.png' };
+
 // decoration_type -> a single environment prop sprite. Drawn one-per-tile,
 // anchored to the tile's base, beneath characters.
 export const DECORATION_ATLAS = {
@@ -80,5 +85,6 @@ export function allImageSources() {
   for (const entry of Object.values(DECORATION_ATLAS)) {
     if (entry.src) sources.add(entry.src);
   }
+  if (DOOR_SPRITE.src) sources.add(DOOR_SPRITE.src);
   return [...sources];
 }

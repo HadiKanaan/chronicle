@@ -5,6 +5,7 @@ import {
   TILE_ATLAS,
   TILE_FALLBACK,
   BUILDING_ATLAS,
+  DOOR_SPRITE,
   DECORATION_ATLAS,
   CHARACTER_ATLAS,
   CHARACTER_FALLBACK,
@@ -372,14 +373,25 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
   }
 
   // Building sprites blitted over their footprint, above tiles, beneath
-  // characters. The wall/floor tiles already drawn remain the fallback.
+  // characters. The wall/floor tiles already drawn remain the fallback. When
+  // the player stands inside a building its roof fades to a ghost so you can
+  // see yourself within instead of standing on top of the sprite. A door sprite
+  // marks the walkable entrance tile.
+  const pTile = playerPos
+    ? { x: Math.round(playerPos.x), y: Math.round(playerPos.y) }
+    : (gameState.player ? { x: Math.round(gameState.player.x), y: Math.round(gameState.player.y) } : null);
   for (const building of gameState.buildings ?? []) {
     const bw = building.width ?? 1;
     const bh = building.height ?? 1;
     if (building.x > endCol + 1 || building.x + bw < startCol - 1 || building.y > endRow + 1 || building.y + bh < startRow - 1) {
       continue;
     }
-    drawBuilding(ctx, images, building, camX, camY);
+    const inside = pTile
+      && pTile.x >= building.x && pTile.x <= building.x + bw - 1
+      && pTile.y >= building.y && pTile.y <= building.y + bh - 1;
+    const alpha = inside ? 0.18 : 1;
+    drawBuilding(ctx, images, building, camX, camY, alpha);
+    drawDoor(ctx, images, building, camX, camY, alpha);
   }
 
   // Characters: back-to-front so nearer ones overlap farther ones. NPCs on a
@@ -447,7 +459,7 @@ function drawTile(ctx, images, type, screenX, screenY) {
   }
 }
 
-function drawBuilding(ctx, images, building, camX, camY) {
+function drawBuilding(ctx, images, building, camX, camY, alpha = 1) {
   const entry = BUILDING_ATLAS[building.building_type];
   const image = entry ? images[entry.src] : undefined;
   if (!image) return; // wall/floor tiles remain the fallback
@@ -457,7 +469,25 @@ function drawBuilding(ctx, images, building, camX, camY) {
   const drawH = building.height * DISPLAY_TILE;
   const screenX = Math.round(building.x * DISPLAY_TILE - camX);
   const screenY = Math.round(building.y * DISPLAY_TILE - camY);
+  if (alpha !== 1) ctx.globalAlpha = alpha;
   ctx.drawImage(image, screenX, screenY, drawW, drawH);
+  if (alpha !== 1) ctx.globalAlpha = 1;
+}
+
+function drawDoor(ctx, images, building, camX, camY, alpha = 1) {
+  const image = images[DOOR_SPRITE.src];
+  if (!image) return;
+  // Backend surfaces the entrance tile; fall back to bottom-centre if absent.
+  const doorX = building.door_x ?? building.x + Math.floor(building.width / 2);
+  const doorY = building.door_y ?? building.y + building.height - 1;
+  const drawH = DISPLAY_TILE * 1.1;
+  const aspect = image.naturalWidth / image.naturalHeight || 0.6;
+  const drawW = drawH * aspect;
+  const centerX = (doorX + 0.5) * DISPLAY_TILE - camX;
+  const feetY = (doorY + 1) * DISPLAY_TILE - camY;
+  if (alpha !== 1) ctx.globalAlpha = alpha;
+  ctx.drawImage(image, Math.round(centerX - drawW / 2), Math.round(feetY - drawH), drawW, drawH);
+  if (alpha !== 1) ctx.globalAlpha = 1;
 }
 
 function drawDecoration(ctx, images, dec, camX, camY) {
