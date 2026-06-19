@@ -182,6 +182,26 @@ def save_region_paths(paths: list[dict[str, Any]]) -> None:
         )
 
 
+def get_region_props() -> list[dict[str, Any]]:
+    """The persisted static town-prop layer (Day 8), or [] if not generated."""
+    static = get_region_static()
+    if not static:
+        return []
+    return static.get("props") or []
+
+
+def save_region_props(props: list[dict[str, Any]]) -> None:
+    """Fold the prop layer into region_static without rewriting the tile grid,
+    buildings, decorations, or paths already stored there."""
+    static = get_region_static() or {}
+    static["props"] = props
+    with _connect() as connection:
+        connection.execute(
+            "INSERT OR REPLACE INTO region_static (id, data) VALUES (1, ?)",
+            (_dumps(static),),
+        )
+
+
 def get_world_state() -> Optional[dict[str, Any]]:
     with _connect() as connection:
         row = connection.execute(

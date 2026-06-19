@@ -32,6 +32,7 @@ from database import (
     get_recent_log,
     get_region_decorations,
     get_region_paths,
+    get_region_props,
     get_world_state,
     init_db,
     log_event,
@@ -42,6 +43,7 @@ from database import (
     save_npcs,
     save_region_decorations,
     save_region_paths,
+    save_region_props,
     save_rumor,
     save_world_state,
     world_is_generated,
@@ -55,6 +57,7 @@ from systems import (
     demon_lord,
     factions,
     paths,
+    props,
     relationships,
     rumors,
     weather,
@@ -419,6 +422,32 @@ def _ensure_paths() -> None:
         )
 
 
+def _ensure_props() -> None:
+    """Generate the static town-prop layer ONCE for the live world (Day 8).
+
+    Idempotent and non-destructive. Runs after decorations and paths so it can
+    avoid them; reads the existing region + NPC home/work tiles and folds the
+    prop placements into region_static.
+    """
+    with _sim_lock:
+        if get_region_props():
+            return
+        state = get_world_state()
+        if not state:
+            return
+        region = state.get("region")
+        if not isinstance(region, dict) or not region.get("tiles"):
+            return
+        dressing = props.generate_props(
+            region, get_all_npcs(), get_region_decorations(), get_region_paths()
+        )
+        save_region_props(dressing)
+        log_event(
+            int(state.get("current_day", 1)), int(state.get("current_hour", 6)),
+            "props", f"Town props generated: {len(dressing)} placements.",
+        )
+
+
 def _advance_one_move_step() -> None:
     """Pop one cached path step per NPC (movement sub-tick, no clock change)."""
     with _sim_lock:
@@ -509,6 +538,7 @@ async def lifespan(_app: FastAPI):
     # (both idempotent).
     _ensure_decorations()
     _ensure_paths()
+    _ensure_props()
     tick_task = asyncio.create_task(_world_tick_loop()) if TICK_ENABLED else None
     # Day 5: warm the conversation model and flesh out Tier 1 cards without
     # blocking startup; daemon so it never holds up shutdown.
@@ -768,6 +798,7 @@ def _build_render_payload() -> RenderPayload:
     ]
     decorations = get_region_decorations()
     road_tiles = get_region_paths()
+    town_props = get_region_props()
     all_factions = get_all_factions()
     # Day 7: reputation now means the faction's regard for the PLAYER (player-
     # driven); morale is its own cohesion/wellbeing (what the Demon Lord erodes).
@@ -813,6 +844,7 @@ def _build_render_payload() -> RenderPayload:
         buildings=buildings,
         decorations=decorations,
         paths=road_tiles,
+        props=town_props,
         rumors=rumor_lines,
         demon_lord_decisions=decision_lines,
         world_paused=_world_frozen(),
@@ -1092,6 +1124,7 @@ def generate_world() -> JSONResponse:
     _ensure_demon_lord()
     _ensure_decorations()
     _ensure_paths()
+    _ensure_props()
     return JSONResponse({"status": "generated", **summary})
 
 

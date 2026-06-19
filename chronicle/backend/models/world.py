@@ -84,6 +84,9 @@ class RenderPayload(BaseModel):
     # Day 8: static dirt-road network connecting building entrances (list of
     # {x, y} tiles), drawn with the kenney dirt tile beneath everything else.
     paths: list[dict] = Field(default_factory=list)
+    # Day 8: static town-prop placements ({prop_type, x, y}) dressed around
+    # buildings (barrels, crates, haystacks, lamps, signs, wells).
+    props: list[dict] = Field(default_factory=list)
     # Day 6: display-ready strings only - rumor summaries and the Demon Lord's
     # recent decisions for the HUD.
     rumors: list[str] = Field(default_factory=list)

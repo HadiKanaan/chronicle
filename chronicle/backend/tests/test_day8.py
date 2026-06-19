@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from systems import decorations, paths
+from systems import decorations, paths, props
 
 
 def _mixed_region(width: int = 20, height: int = 20) -> dict:
@@ -247,3 +247,32 @@ def test_paths_persist_and_surface_in_payload(temp_db):
 
     import main
     assert main._build_render_payload().paths == network
+
+
+# --------------------------------------------------------------------------- #
+# Town props - near buildings, on open grass, avoiding everything placed
+# --------------------------------------------------------------------------- #
+def test_props_avoid_occupied_and_sit_on_grass():
+    region = _two_building_region()
+    decs = [{"decoration_type": "tree", "x": 5, "y": 1}]
+    network = paths.generate_paths(region)
+    placed = props.generate_props(region, [], decs, network)
+
+    assert placed, "expected props dressed around the buildings"
+    tile_at = {(t["x"], t["y"]): t for row in region["tiles"] for t in row}
+    occupied = {(d["x"], d["y"]) for d in decs} | {(p["x"], p["y"]) for p in network}
+    seen = set()
+    for prop in placed:
+        assert prop["prop_type"] in {"barrel", "crate", "haystack", "lamp", "sign", "well"}
+        pos = (prop["x"], prop["y"])
+        tile = tile_at[pos]
+        assert tile["tile_type"] == "grass" and tile["passable"], "prop off open grass"
+        assert pos not in occupied, "prop on a decoration/road tile"
+        assert pos not in seen, "two props stacked on one tile"
+        seen.add(pos)
+
+
+def test_props_stable_across_calls():
+    region = _two_building_region()
+    network = paths.generate_paths(region)
+    assert props.generate_props(region, [], [], network) == props.generate_props(region, [], [], network)

@@ -21,6 +21,7 @@ const EMPTY_STATE = {
   buildings: [],
   decorations: [],
   paths: [],
+  props: [],
   manually_paused: false
 };
 

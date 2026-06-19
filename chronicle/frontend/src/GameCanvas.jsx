@@ -10,6 +10,7 @@ import {
   BUILDING_ATLAS,
   DOOR_SPRITE,
   DECORATION_ATLAS,
+  PROP_ATLAS,
   CHARACTER_ATLAS,
   CHARACTER_FALLBACK,
   CHARACTER_TINTS,
@@ -437,6 +438,14 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     drawDecoration(ctx, images, dec, camX, camY);
   }
 
+  // Town props dressing the grass around buildings (static, beneath characters).
+  for (const prop of gameState.props ?? []) {
+    if (prop.x < startCol - 1 || prop.x > endCol + 1 || prop.y < startRow - 1 || prop.y > endRow + 1) {
+      continue;
+    }
+    drawProp(ctx, images, prop, camX, camY);
+  }
+
   // Depth-sorted world layer: NPCs and buildings interleave by their base row
   // so a villager standing inside a building is hidden by its roof from the
   // outside, while one in front of it draws over it. Buildings sort half a tile
@@ -586,6 +595,18 @@ function drawDecoration(ctx, images, dec, camX, camY) {
   const drawW = drawH * aspect;
   const centerX = (dec.x + 0.5) * DISPLAY_TILE - camX;
   const feetY = (dec.y + 1) * DISPLAY_TILE - camY;
+  ctx.drawImage(image, Math.round(centerX - drawW / 2), Math.round(feetY - drawH), drawW, drawH);
+}
+
+function drawProp(ctx, images, prop, camX, camY) {
+  const entry = PROP_ATLAS[prop.prop_type];
+  const image = entry ? images[entry.src] : undefined;
+  if (!image) return;
+  const drawH = (entry.tilesTall ?? 1.0) * DISPLAY_TILE;
+  const aspect = image.naturalWidth / image.naturalHeight || 1;
+  const drawW = drawH * aspect;
+  const centerX = (prop.x + 0.5) * DISPLAY_TILE - camX;
+  const feetY = (prop.y + 1) * DISPLAY_TILE - camY;
   ctx.drawImage(image, Math.round(centerX - drawW / 2), Math.round(feetY - drawH), drawW, drawH);
 }
 

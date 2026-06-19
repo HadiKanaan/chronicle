@@ -74,6 +74,17 @@ DECORATIONS = {
     "rock": "medievalEnvironment_09.png",
 }
 
+# prop_type -> source Fan-tasy prop (relative to Art/). Town dressing placed near
+# buildings for a lived-in feel.
+PROPS = {
+    "lamp": "Props/LampPost_3.png",
+    "well": "Buildings/Well_Hay_1.png",
+    "sign": "Props/Sign_1.png",
+    "barrel": "Props/Barrel_Small_Empty.png",
+    "haystack": "Props/HayStack_2.png",
+    "crate": "Props/Crate_Large_Empty.png",
+}
+
 
 def _trim(img: Image.Image) -> Image.Image:
     """Crop transparent padding so the draw scales the art, not the empty frame."""
@@ -103,6 +114,10 @@ def main() -> None:
     print("decorations:")
     for name, src in DECORATIONS.items():
         _copy_trimmed(os.path.join(KENNEY_ENV, src), os.path.join(ASSETS, "decorations", f"{name}.png"))
+
+    print("props (Fan-tasy town dressing):")
+    for name, rel in PROPS.items():
+        _copy_trimmed(os.path.join(FANTASY_ART, *rel.split("/")), os.path.join(ASSETS, "props", f"{name}.png"))
 
     print("door:")
     # First frame (closed door) of the Fan-tasy door animation strip, trimmed.

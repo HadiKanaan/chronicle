@@ -80,6 +80,18 @@ export const DECORATION_ATLAS = {
   rock: { src: '/assets/decorations/rock.png' },
 };
 
+// prop_type -> a Fan-tasy town-dressing sprite, with how tall it should draw (in
+// tiles); width follows each trimmed sprite's own aspect. Anchored at the tile
+// base, beneath characters, like decorations.
+export const PROP_ATLAS = {
+  lamp: { src: '/assets/props/lamp.png', tilesTall: 1.7 },
+  well: { src: '/assets/props/well.png', tilesTall: 1.5 },
+  sign: { src: '/assets/props/sign.png', tilesTall: 0.9 },
+  barrel: { src: '/assets/props/barrel.png', tilesTall: 0.85 },
+  haystack: { src: '/assets/props/haystack.png', tilesTall: 0.95 },
+  crate: { src: '/assets/props/crate.png', tilesTall: 0.9 },
+};
+
 // sprite_id -> a Pixel Crawler 6-frame walk/run sheet (uniform 384x64 = six
 // 64px cells). The renderer cycles frames while a character is moving and shows
 // frame 0 when idle. `scale` lands each character at ~1.5 tiles tall.
@@ -131,6 +143,9 @@ export function allImageSources() {
     }
   }
   for (const entry of Object.values(DECORATION_ATLAS)) {
+    if (entry.src) sources.add(entry.src);
+  }
+  for (const entry of Object.values(PROP_ATLAS)) {
     if (entry.src) sources.add(entry.src);
   }
   if (DOOR_SPRITE.src) sources.add(DOOR_SPRITE.src);
