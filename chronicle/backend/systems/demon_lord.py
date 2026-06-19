@@ -24,6 +24,7 @@ single-call queue with think=False.
 from __future__ import annotations
 
 import random
+import re
 from typing import Any, Optional
 
 import database
@@ -211,7 +212,11 @@ def parse_decision(raw: str, factions: list[dict[str, Any]]) -> Optional[dict[st
     if action not in ACTION_TYPES:
         return None
     target = match_faction_id(data.get("target_faction"), factions)
-    announcement = str(data.get("announcement", "")).strip()[:ANNOUNCEMENT_MAX_CHARS]
+    announcement = str(data.get("announcement", "")).strip()
+    # Strip a leading "Day N:" the model sometimes copies from the stamped
+    # whispers in its prompt - otherwise it doubles when remember()/the summary
+    # prepend the day, and rides into the rumor text.
+    announcement = re.sub(r"^\s*Day\s+\d+:\s*", "", announcement)[:ANNOUNCEMENT_MAX_CHARS]
     if not announcement:
         announcement = _STUB_ANNOUNCEMENTS[action]
     effects = _validate_effects(data.get("faction_reputation_effects"), factions)
@@ -262,8 +267,11 @@ def build_decision_prompt(
         "Each dawn you make ONE strategic move. Respond ONLY with one JSON "
         'object exactly like this: {"action_type": "<one of: ' + actions + '>", '
         '"target_faction": "<a faction id from the list below, or empty string>", '
-        '"announcement": "<1-2 dramatic sentences the townsfolk will whisper '
-        'about what happened>", '
+        '"announcement": "<1-2 plain, concrete sentences naming what you actually '
+        "did this dawn (the action above) and what changed in the town - who or "
+        "what was struck. Do NOT open with generic night/shadow/silence imagery "
+        "(no 'night fell', 'shadows stir', 'something shifted'), do NOT start with "
+        "a date, and do NOT reuse the wording of your recent moves below>\", "
         '"faction_reputation_effects": {"<faction id>": <integer -8..8>}} '
         "Every key in faction_reputation_effects must be a faction id from the "
         "list below. Always include all four fields.",
@@ -281,7 +289,7 @@ def build_decision_prompt(
         lines.extend(f"- {text}" for text in rumor_texts[-3:])
     past = state.get("demon_lord_decisions", [])
     if past:
-        lines.append("Your recent moves (do not simply repeat them):")
+        lines.append("Your recent moves (do not reuse their wording, imagery, or openings):")
         lines.extend(f"- {entry.get('summary', '')}" for entry in past[-3:])
     return "\n".join(lines)
 

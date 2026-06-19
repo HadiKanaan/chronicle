@@ -98,6 +98,15 @@ def test_remember_refreshes_duplicate_memories_instead_of_stacking():
     ]
 
 
+def test_remember_collapses_a_doubled_day_stamp():
+    from systems import behavior
+
+    npc = {"id": "npc_z", "memory_buffer": []}
+    # A caller prepended "Day N:" to text that already carried one - store it once.
+    behavior.remember(npc, "Day 4: Day 4: Night fell quietly on Aldenmoor.")
+    assert npc["memory_buffer"] == ["Day 4: Night fell quietly on Aldenmoor."]
+
+
 def test_world_gen_npc_names_are_unique():
     from systems import world_gen
 

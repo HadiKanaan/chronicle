@@ -8,6 +8,17 @@ memory — the conversation-depth upgrade) → **B** (ML registry to 13/14) → 
 (tier promotion). They were split so each ships and is reviewed on its own; run as
 many as time allows.
 
+> **STATUS (2026-06-19):** ✅ **A DONE** (visual flavor + 64×64 expansion). ✅ **D
+> DONE** (commit 66b4494, systems/recall.py TF-IDF recall). ✅ The deferred
+> "conversation decompose + situation-slim" item also SHIPPED this day — the
+> conversation speedup (LLM writes only the reply; mood/sentiment/memory computed
+> backend-side via systems/sentiment.py) plus prefix-warming, the de-naming fix,
+> brevity/sentence-trim, and the IPv4 proxy fix. See [[chronicle-build-state]].
+> ⏳ **REMAINING: run B next, then C.** (B's Witness Memory Tagger should gate
+> EVENT/rumor seeding — storm memories, rumor witnesses — NOT the conversation
+> memories, which build_conversation_memory already handles, so the two paths
+> don't fight.)
+
 Shipped through Day 7: fog/save/continent, LLM schema-hardening + provider toggle,
 faction decoupling, the live ML batch (11 models), debug controls, conversation
 tuning + current-turn prompt anchor. See [[chronicle-build-state]],
@@ -195,9 +206,9 @@ past - not just the last thing that happened."
 - **Continent visual richness** (hillshading from the existing elevation field,
   more biome bands — beach/mountain/snow — higher grid resolution, parchment
   styling). Cheap, frontend-mostly; a nice extra if Command A lands early.
-- **Conversation decompose + situation-slim** (LLM prose-only, ML-derived
-  mood/sentiment) to cut warm latency — superseded for the demo by the Azure
-  toggle, but the right long-term fix.
+- ~~**Conversation decompose + situation-slim** (LLM prose-only, ML-derived
+  mood/sentiment) to cut warm latency~~ — ✅ DONE 2026-06-19 (the conversation
+  speedup + prefix-warming work; see [[chronicle-build-state]]).
 - **Embedding-based RAG** (Ollama nomic-embed-text + a per-memory vector store) —
   the quality upgrade over Command D's TF-IDF.
 - **Nation-scale models** (Political Stability, Economic Flow) — honest roadmap;

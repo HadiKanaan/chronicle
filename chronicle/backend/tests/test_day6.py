@@ -269,6 +269,18 @@ def test_parse_decision_fills_default_effects_and_announcement():
     assert decision["faction_reputation_effects"] == demon_lord.ACTION_DEFAULT_EFFECTS["dark_omen"]
 
 
+def test_parse_decision_strips_leaked_day_stamp_from_announcement():
+    # The model sometimes copies a "Day N:" from the stamped whispers in its
+    # prompt; left in, it doubles when remember()/the summary prepend the day.
+    raw = (
+        '{"action_type": "spread_fear",'
+        '"announcement": "Day 4: Fear walks the lanes tonight.",'
+        '"faction_reputation_effects": {"faction_commons": -3}}'
+    )
+    decision = demon_lord.parse_decision(raw, _factions())
+    assert decision["announcement"] == "Fear walks the lanes tonight."
+
+
 def test_generate_decision_rerolls_once_on_invalid_output(monkeypatch):
     responses = iter(
         [

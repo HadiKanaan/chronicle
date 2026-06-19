@@ -306,6 +306,11 @@ def update_movement(npcs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # Memory entries are stamped "Day N: ..."; the stamp is ignored when checking
 # for duplicates so a repeated event refreshes rather than stacks.
 _DAY_STAMP = re.compile(r"^Day \d+:\s*")
+# A doubled stamp ("Day 4: Day 4: ...") leaks when a caller prepends "Day N:" to
+# text that already carried one (e.g. a Demon-Lord announcement the model wrote
+# starting with a day stamp). Collapse any run of leading stamps to the first
+# (the caller's, with the correct current day).
+_DOUBLE_DAY_STAMP = re.compile(r"^(Day \d+:\s*)(?:Day \d+:\s*)+")
 
 
 def remember(npc: dict[str, Any], text: str) -> None:
@@ -317,6 +322,7 @@ def remember(npc: dict[str, Any], text: str) -> None:
     with near-identical lines and squeezing everything else out.
     """
     buffer = npc.setdefault("memory_buffer", [])
+    text = _DOUBLE_DAY_STAMP.sub(r"\1", text)  # never store a doubled "Day N: Day N:" stamp
     core = _DAY_STAMP.sub("", text)
     buffer[:] = [entry for entry in buffer if _DAY_STAMP.sub("", entry) != core]
     buffer.append(text)
