@@ -192,6 +192,26 @@ def test_clean_reply_strips_narration_and_stage_directions(monkeypatch):
     assert "forge runs hot" in r["reply"]
 
 
+def test_clean_reply_trims_rambling_and_truncation_to_whole_sentences(monkeypatch):
+    npc = _tier1_npc()
+    # A rambling four-sentence reply is cut to the first two.
+    monkeypatch.setattr(
+        conversation, "_call_llm",
+        lambda **kw: "Aye, the forge runs hot. Business is steady enough. The magistrate frets. Rumors swirl nightly.",
+    )
+    r = conversation.converse_tier1(npc, "Aldric", "busy?")
+    assert r["reply"] == "Aye, the forge runs hot. Business is steady enough."
+    assert "magistrate" not in r["reply"]  # third+ sentences dropped
+    # A reply truncated mid-sentence (no closing punctuation) ends cleanly.
+    monkeypatch.setattr(
+        conversation, "_call_llm",
+        lambda **kw: "Aye, work is fine. The river is calm. I was about to say somethin",
+    )
+    r = conversation.converse_tier1(npc, "Aldric", "ok")
+    assert r["reply"].endswith((".", "!", "?"))
+    assert "somethin" not in r["reply"]  # dangling fragment dropped
+
+
 def test_plain_path_falls_back_to_stub_when_llm_down(monkeypatch):
     monkeypatch.setattr(conversation, "_call_llm", lambda **kwargs: None)
     result = conversation.converse_tier1(_tier1_npc(), "Aldric", "Hello?")

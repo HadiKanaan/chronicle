@@ -79,13 +79,24 @@ LLM_TIMEOUT_SECONDS = 120.0
 LLM_STRUCTURED_OUTPUT = False
 
 # Conversation replies stay short (1-3 sentences) so num_predict can be tight.
-# Plain-text path (default): ~80 tokens is plenty for 1-2 sentences and a fraction
-# of the old envelope's output cost. Structured path keeps the wider 260 cap: a
-# 220-token cap was observed live truncating the JSON envelope mid-string when the
-# model wrote a long reply plus a long memory.
-CONVERSE_REPLY_NUM_PREDICT = 80
+# Plain-text path (default): 72 tokens covers 1-2 sentences (observed replies run
+# ~20-55 tokens) while capping the model's tendency to ramble more as a
+# conversation grows. Structured path keeps the wider 260 cap: a 220-token cap was
+# observed live truncating the JSON envelope mid-string when the model wrote a long
+# reply plus a long memory.
+CONVERSE_REPLY_NUM_PREDICT = 72
 CONVERSE_NUM_PREDICT = 260
 CARD_GEN_NUM_PREDICT = 300
+
+# Anti-repetition sampling (Day 8). The 1.5B model otherwise recites its own
+# previous reply verbatim (the history replays it back), which fails the parrot
+# guard and forces a retry - extra latency. A mild repeat penalty over a window
+# that reaches back past the situation block to the last reply breaks verbatim
+# echoes at sampling time (cheap, no extra call), so the first attempt usually
+# passes and the retry stays a rare backstop. Kept mild (1.2) so it suppresses
+# parroting without flattening natural word reuse.
+REPEAT_PENALTY = 1.2
+REPEAT_LAST_N = 256
 
 # A reply this similar to the NPC's previous line counts as parroting and
 # triggers the anti-repeat retry (qwen3:4b habitually copies its own last
@@ -306,7 +317,12 @@ def _call_ollama(
         think=False,
         format=response_format,
         keep_alive=KEEP_ALIVE,
-        options={"temperature": temperature, "num_predict": num_predict},
+        options={
+            "temperature": temperature,
+            "num_predict": num_predict,
+            "repeat_penalty": REPEAT_PENALTY,
+            "repeat_last_n": REPEAT_LAST_N,
+        },
     )
     logger.info(
         "Ollama call (schema=%s): prompt_eval=%s tok / %.1fs, gen=%s tok / %.1fs",
@@ -574,7 +590,10 @@ def build_character_prompt(npc: dict[str, Any]) -> str:
     else:
         # Day 8: the model writes only the spoken line; the backend computes the
         # mood/sentiment/memory side-channel. No JSON, no schema grammar.
-        guidance += "Answer in 1-2 short, plain sentences, in character - nothing else."
+        guidance += (
+            "Answer in one or two short sentences and then stop - do not ramble or "
+            "pile on extra detail. Nothing else."
+        )
     lines.append(guidance)
     return "\n".join(lines)
 
@@ -901,6 +920,13 @@ def _clean_plain_reply(raw: str, current_mood: str) -> str:
     text = re.sub(r"^\s*Day\s+\d+:\s*", "", text)
     if not text or _looks_like_json_guts(text):
         text = _safe_line(current_mood)
+    # Keep the reply to its first couple of complete sentences. The 1.5B model
+    # rambles past the "one or two sentences" instruction, and the num_predict cap
+    # can truncate the tail mid-sentence; trimming to whole sentences enforces
+    # brevity AND drops any dangling truncated fragment, so replies end cleanly.
+    sentences = re.findall(r"[^.!?]+[.!?]+", text)
+    if sentences:
+        text = "".join(sentences[:2]).strip() or text
     return text[:REPLY_MAX_CHARS].strip()
 
 
