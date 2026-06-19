@@ -10,6 +10,7 @@ import {
   DECORATION_ATLAS,
   CHARACTER_ATLAS,
   CHARACTER_FALLBACK,
+  CHARACTER_TINTS,
   DAY_NIGHT_TINT,
   allImageSources,
 } from './sprites';
@@ -47,6 +48,42 @@ function passableType(type) {
 }
 
 const characterId = (c) => c.id ?? c.npc_id;
+
+const WALK_FRAME_MS = 110; // ~9fps walk cycle
+
+// Cache of tinted character sheets, keyed by `${src}|${tintIndex}`, built once
+// per (sheet, tint). Tinting a full sheet keeps per-frame slicing identical.
+const _tintCache = new Map();
+function tintedSheet(image, src, tintIndex) {
+  if (!CHARACTER_TINTS[tintIndex]) return image; // index 0 / none -> natural
+  const key = `${src}|${tintIndex}`;
+  let canvas = _tintCache.get(key);
+  if (canvas) return canvas;
+  canvas = document.createElement('canvas');
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  const cx = canvas.getContext('2d');
+  cx.imageSmoothingEnabled = false;
+  cx.drawImage(image, 0, 0);
+  cx.globalCompositeOperation = 'source-atop'; // tint only the opaque pixels
+  cx.fillStyle = CHARACTER_TINTS[tintIndex];
+  cx.fillRect(0, 0, canvas.width, canvas.height);
+  _tintCache.set(key, canvas);
+  return canvas;
+}
+
+// Stable per-id tint choice (0 = no tint) so a villager always looks the same.
+function tintIndexFor(id) {
+  if (id == null) return 0;
+  let h = 0;
+  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) & 0x7fffffff;
+  return h % CHARACTER_TINTS.length;
+}
+
+// A character is "moving" while its glide is still running toward a new tile.
+function isMoving(pos, now) {
+  return Boolean(pos && now - pos.t0 < pos.dur && (pos.fromX !== pos.toX || pos.fromY !== pos.toY));
+}
 
 // Deterministic rain streaks, precomputed once so the storm/rain overlay never
 // flickers frame-to-frame (no Math.random in the draw loop).
@@ -408,7 +445,7 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     const pos = positions.get(characterId(npc));
     const drawX = pos ? pos.x : npc.x;
     const drawY = pos ? pos.y : npc.y;
-    worldItems.push({ sortY: drawY + 1, kind: 'npc', npc, drawX, drawY });
+    worldItems.push({ sortY: drawY + 1, kind: 'npc', npc, drawX, drawY, moving: isMoving(pos, now) });
   }
   for (const building of gameState.buildings ?? []) {
     const bw = building.width ?? 1;
@@ -425,7 +462,7 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
   worldItems.sort((a, b) => a.sortY - b.sortY);
   for (const item of worldItems) {
     if (item.kind === 'npc') {
-      drawCharacter(ctx, images, item.npc, item.drawX, item.drawY, camX, camY);
+      drawCharacter(ctx, images, item.npc, item.drawX, item.drawY, camX, camY, now, item.moving);
     } else {
       drawBuilding(ctx, images, item.building, camX, camY, item.alpha);
       drawDoor(ctx, images, item.building, camX, camY, item.alpha);
@@ -438,7 +475,7 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     const pos = positions.get(gameState.player.npc_id);
     const drawX = pos ? pos.x : gameState.player.x;
     const drawY = pos ? pos.y : gameState.player.y;
-    drawCharacter(ctx, images, { ...gameState.player, isPlayer: true }, drawX, drawY, camX, camY);
+    drawCharacter(ctx, images, { ...gameState.player, isPlayer: true }, drawX, drawY, camX, camY, now, isMoving(pos, now));
   }
 
   // Fog overlays painted on top: explored tiles get a dim wash, unexplored go
@@ -535,11 +572,17 @@ function drawDecoration(ctx, images, dec, camX, camY) {
   ctx.drawImage(image, Math.round(centerX - drawW / 2), Math.round(feetY - drawH), drawW, drawH);
 }
 
-function drawCharacter(ctx, images, character, worldX, worldY, camX, camY) {
+function drawCharacter(ctx, images, character, worldX, worldY, camX, camY, now, moving) {
   const entry = CHARACTER_ATLAS[character.sprite_id] ?? CHARACTER_FALLBACK;
   // Tile center on screen, and the bottom of the tile (where feet rest).
   const centerX = (worldX + 0.5) * DISPLAY_TILE - camX;
   const feetY = (worldY + 1) * DISPLAY_TILE - camY;
+
+  // Soft round contact shadow grounds every character (cheap, big readability win).
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.26)';
+  ctx.beginPath();
+  ctx.ellipse(centerX, feetY - DISPLAY_TILE * 0.06, DISPLAY_TILE * 0.30, DISPLAY_TILE * 0.13, 0, 0, Math.PI * 2);
+  ctx.fill();
 
   if (character.isPlayer) {
     // A soft ring under the player so the inherited host identity is findable.
@@ -555,11 +598,18 @@ function drawCharacter(ctx, images, character, worldX, worldY, camX, camY) {
     ctx.fillRect(centerX - DISPLAY_TILE * 0.3, feetY - DISPLAY_TILE * 0.8, DISPLAY_TILE * 0.6, DISPLAY_TILE * 0.8);
     return;
   }
+
+  // Cycle the walk/run frames while moving; idle on frame 0. NPCs get a stable
+  // clothing tint; the player stays untinted (recognisable, plus the ring).
+  const frames = entry.frames ?? 1;
+  const frame = moving && frames > 1 ? Math.floor(now / WALK_FRAME_MS) % frames : 0;
+  const sheet = character.isPlayer ? image : tintedSheet(image, entry.src, tintIndexFor(character.id));
+
   const drawW = entry.fw * entry.scale;
   const drawH = entry.fh * entry.scale;
   ctx.drawImage(
-    image,
-    entry.sx, entry.sy, entry.fw, entry.fh,
+    sheet,
+    frame * entry.fw, 0, entry.fw, entry.fh,
     Math.round(centerX - drawW / 2), Math.round(feetY - drawH),
     drawW, drawH,
   );

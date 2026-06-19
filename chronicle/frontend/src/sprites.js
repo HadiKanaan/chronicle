@@ -55,17 +55,32 @@ export const DECORATION_ATLAS = {
   rock: { src: '/assets/decorations/rock.png' },
 };
 
-// sprite_id -> first idle frame of a Pixel Crawler character sheet. `scale`
-// normalizes the differing frame paddings so every character lands at roughly
-// one-and-a-half tiles tall on screen.
+// sprite_id -> a Pixel Crawler 6-frame walk/run sheet (uniform 384x64 = six
+// 64px cells). The renderer cycles frames while a character is moving and shows
+// frame 0 when idle. `scale` lands each character at ~1.5 tiles tall.
 export const CHARACTER_ATLAS = {
-  human_base: { src: '/assets/characters/human_base.png', sx: 0, sy: 0, fw: 64, fh: 64, scale: 1.5 },
-  npc_knight: { src: '/assets/characters/knight.png', sx: 0, sy: 0, fw: 32, fh: 32, scale: 1.7 },
-  npc_rogue: { src: '/assets/characters/rogue.png', sx: 0, sy: 0, fw: 32, fh: 32, scale: 1.7 },
-  npc_wizard: { src: '/assets/characters/wizard.png', sx: 0, sy: 0, fw: 32, fh: 32, scale: 1.7 },
+  human_base: { src: '/assets/characters/human_base.png', fw: 64, fh: 64, frames: 6, scale: 1.5 },
+  npc_knight: { src: '/assets/characters/knight.png', fw: 64, fh: 64, frames: 6, scale: 1.5 },
+  npc_rogue: { src: '/assets/characters/rogue.png', fw: 64, fh: 64, frames: 6, scale: 1.5 },
+  npc_wizard: { src: '/assets/characters/wizard.png', fw: 64, fh: 64, frames: 6, scale: 1.5 },
 };
 
 export const CHARACTER_FALLBACK = CHARACTER_ATLAS.human_base;
+
+// Per-NPC clothing tints (a translucent colour cast applied over the sprite, not
+// the player). Index 0 is "no tint" so a share of villagers stay natural; the
+// rest spread across muted hues so a crowd of the same base sprite reads as many
+// different people. Kept low-alpha so skin doesn't look painted.
+export const CHARACTER_TINTS = [
+  null,
+  'rgba(80, 130, 200, 0.30)',   // blue
+  'rgba(70, 150, 90, 0.30)',    // green
+  'rgba(170, 70, 80, 0.30)',    // red
+  'rgba(150, 100, 180, 0.30)',  // purple
+  'rgba(190, 150, 60, 0.30)',   // gold
+  'rgba(70, 160, 170, 0.30)',   // teal
+  'rgba(190, 110, 60, 0.30)',   // orange
+];
 
 // Full-canvas color wash per time_of_day. `null` means draw nothing (full day).
 export const DAY_NIGHT_TINT = {

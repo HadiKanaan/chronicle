@@ -11,10 +11,11 @@ lost - a freshly generated world then looks identical out of the box.
 It is idempotent: every run re-copies from the pristine pack sources and
 re-trims, so the result is deterministic regardless of prior state.
 
-NOTE: the Day 3 terrain + character assets (assets/tiles/*, assets/characters/*)
-predate this script and are assumed already present. Only the Day 8 additions
-- building sprites, decoration props, the door, and the kenney RTS spritesheet
-used for road tiles - are (re)built here.
+NOTE: the Day 3 terrain tiles (assets/tiles/ground|road|walls|floors|water.png)
+predate this script and are assumed already present. The Day 8 additions
+- building sprites, decoration props, the door, the kenney RTS spritesheet used
+for road tiles, and the animated 6-frame character walk/run sheets - are
+(re)built here.
 """
 
 from __future__ import annotations
@@ -33,6 +34,17 @@ KENNEY = os.path.join(PACK_ROOT, "kenney_medieval-rts", "PNG", "Default size")
 KENNEY_STRUCT = os.path.join(KENNEY, "Structure")
 KENNEY_ENV = os.path.join(KENNEY, "Environment")
 KENNEY_SHEET = os.path.join(PACK_ROOT, "kenney_medieval-rts", "Spritesheet", "medievalRTS_spritesheet.png")
+PC = os.path.join(PACK_ROOT, "Pixel Crawler - Free Pack", "Entities")
+
+# sprite_id -> source 6-frame, 64px walk/run sheet. Uniform layout (384x64) so
+# every character type animates identically. Copied RAW (never trimmed - that
+# would wreck frame alignment).
+CHARACTERS = {
+    "human_base.png": os.path.join(PC, "Characters", "Body_A", "Animations", "Walk_Base", "Walk_Down-Sheet.png"),
+    "knight.png": os.path.join(PC, "Npc's", "Knight", "Run", "Run-Sheet.png"),
+    "rogue.png": os.path.join(PC, "Npc's", "Rogue", "Run", "Run-Sheet.png"),
+    "wizard.png": os.path.join(PC, "Npc's", "Wizzard", "Run", "Run-Sheet.png"),
+}
 FANTASY_DOOR = os.path.join(
     PACK_ROOT, "The Fan-tasy Tileset (Free) 1.5.7", "The Fan-tasy Tileset (Free)",
     "Art", "Buildings", "Animations", "Door_Normal_Wood.png",
@@ -95,6 +107,13 @@ def main() -> None:
     os.makedirs(os.path.dirname(sheet_dst), exist_ok=True)
     shutil.copyfile(KENNEY_SHEET, sheet_dst)
     print(f"  {'kenney_rts.png':22s} <- medievalRTS_spritesheet.png")
+
+    print("characters (6-frame walk/run sheets, copied raw):")
+    for name, src in CHARACTERS.items():
+        dst = os.path.join(ASSETS, "characters", name)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copyfile(src, dst)
+        print(f"  {name:22s} <- {os.path.basename(src)}")
 
     print("done.")
 
