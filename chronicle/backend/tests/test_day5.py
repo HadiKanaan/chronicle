@@ -142,7 +142,10 @@ def _tier1_npc(**overrides):
     return npc
 
 
-def test_character_prompt_is_static_and_carries_the_card():
+def test_character_prompt_is_static_and_carries_the_card(monkeypatch):
+    # The JSON contract only appears on the legacy structured path (Day 8 made
+    # plain text the default); exercise it here.
+    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
     prompt = conversation.build_character_prompt(_tier1_npc())
     assert "Mara Vane" in prompt
     assert "blacksmith" in prompt
@@ -166,9 +169,12 @@ def test_situation_block_carries_volatile_context():
     assert "Cultists struck the market." in block  # rumor texts surfaced
 
 
-def test_history_replays_as_chat_turns_with_reply_envelope():
+def test_history_replays_as_chat_turns_with_reply_envelope(monkeypatch):
     import json
 
+    # The {"reply": ...} envelope is the structured path's in-context schooling;
+    # the Day 8 default replays the bare spoken line instead.
+    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
     messages = conversation._history_messages(_tier1_npc())
     assert messages[0] == {"role": "user", "content": "Hello."}
     assert messages[1]["role"] == "assistant"
@@ -195,6 +201,8 @@ def test_converse_tier1_splits_static_prefix_from_volatile_user_block(monkeypatc
 
 def test_converse_tier1_parses_llm_output(monkeypatch):
     raw = '{"reply": "State your business.", "mood": "suspicious", "sentiment_delta": -1, "memory": "a stranger pried"}'
+    # Reply + model-authored mood come from one JSON call on the structured path.
+    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
     monkeypatch.setattr(conversation, "_call_llm", lambda **kwargs: raw)
     result = conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "What do you forge?")
     assert result["used_llm"] is True
@@ -210,6 +218,9 @@ def test_converse_tier1_retries_once_when_reply_dropped(monkeypatch):
         ]
     )
     calls = []
+    # Reply-field salvage + retry is structured-path behavior (the JSON envelope
+    # is what can drop "reply"); plain text has no field to drop.
+    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
     monkeypatch.setattr(
         conversation, "_call_llm", lambda **kwargs: calls.append(1) or next(responses)
     )
@@ -223,6 +234,7 @@ def test_converse_tier1_retries_once_when_reply_dropped(monkeypatch):
 def test_converse_tier1_uses_first_salvage_when_retry_also_drops_reply(monkeypatch):
     raw = '{"mood": "content", "sentiment_delta": 0, "memory": "The river keeps its secrets."}'
     calls = []
+    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
     monkeypatch.setattr(
         conversation, "_call_llm", lambda **kwargs: calls.append(1) or raw
     )

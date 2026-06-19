@@ -1,9 +1,14 @@
-"""LLM conversation system (Day 5 / User Story 3).
+"""LLM conversation system (Day 5 / User Story 3; Day 8 speedup).
 
-Talks to a locally running Ollama instance (qwen3:4b) for two jobs:
+Talks to a locally running Ollama instance for two jobs:
 
-1. Tier 1 NPC conversations: one chat call returns both the in-character reply
-   and a card delta (mood, sentiment shift, a remembered sentence) as JSON.
+1. Tier 1 NPC conversations: by default (Day 8) the model writes ONLY the
+   in-character reply as plain text - smaller input, smaller output - and the
+   backend computes the side-channel (sentiment delta from the player's message
+   via systems.sentiment, the post-exchange mood by drifting along
+   behavior.MOOD_VALENCE, and a significance-gated memory line) for free. The
+   old single-call JSON envelope ({reply, mood, sentiment_delta, memory}) is
+   retained behind the ``LLM_STRUCTURED_OUTPUT`` flag for A/B comparison.
 2. Tier 1 card enrichment: a one-off generation pass that gives each Tier 1
    NPC a sharper appearance, dark trait, redeeming quality, trauma, and
    conversation style than the seeded placeholders.
@@ -35,7 +40,7 @@ from typing import Any, Optional
 
 from ml import train as ml
 from models.npc import MoodType
-from systems import recall
+from systems import behavior, recall, sentiment
 
 try:  # pragma: no cover - exercised by environment, not unit tests
     import ollama
@@ -66,9 +71,19 @@ OLLAMA_HOST = "http://localhost:11434"
 KEEP_ALIVE = -1
 LLM_TIMEOUT_SECONDS = 120.0
 
+# Day 8: by default the model emits ONLY the reply, so split the work between
+# the LLM (reply text) and cheap backend ML/heuristics (mood/sentiment/memory).
+# Set True to restore the Day 5-7 single-call JSON envelope (richer model-authored
+# memories, A/B latency comparison) - build_character_prompt and converse_tier1
+# both switch paths on this flag.
+LLM_STRUCTURED_OUTPUT = False
+
 # Conversation replies stay short (1-3 sentences) so num_predict can be tight.
-# 260, not 220: a 220-token cap was observed live truncating the JSON envelope
-# mid-string when the model wrote a long reply plus a long memory.
+# Plain-text path (default): ~80 tokens is plenty for 1-2 sentences and a fraction
+# of the old envelope's output cost. Structured path keeps the wider 260 cap: a
+# 220-token cap was observed live truncating the JSON envelope mid-string when the
+# model wrote a long reply plus a long memory.
+CONVERSE_REPLY_NUM_PREDICT = 80
 CONVERSE_NUM_PREDICT = 260
 CARD_GEN_NUM_PREDICT = 300
 
@@ -78,10 +93,26 @@ CARD_GEN_NUM_PREDICT = 300
 REPEAT_SIMILARITY = 0.9
 
 # Rolling per-NPC conversation transcript kept on the card for prompt context.
-HISTORY_CAP = 6
+# Day 8: 4, not 6 - fewer replayed turns means less prompt prefill on every turn,
+# and with relevance recall the deep memory store carries the long-term context.
+HISTORY_CAP = 4
 SENTIMENT_DELTA_LIMIT = 10
 MEMORY_MAX_CHARS = 200
 REPLY_MAX_CHARS = 600
+
+# Day 8 memory gating: only a significant exchange seeds the deep memory store
+# (the Witness Memory Tagger's substrate), so trivial chatter never bloats it.
+# Significant = |sentiment_delta| >= this, OR the message names a charged topic.
+MEMORY_SIGNIFICANCE_THRESHOLD = 4
+
+# Moods reserved for scripted story beats - the conversation mood drift below
+# never emits them (an NPC does not start grieving because the player was rude).
+RESERVED_MOODS = {"grieving", "fearful"}
+
+# How far a maximal sentiment swing (+-SENTIMENT_DELTA_LIMIT) drifts an NPC along
+# the valence ladder - ~0.30 is about two mood rungs, so a clear insult can move
+# content -> suspicious while idle chatter holds the current mood.
+MOOD_DRIFT_SPAN = 0.30
 
 VALID_MOODS = {mood.value for mood in MoodType}
 
@@ -513,9 +544,9 @@ def build_character_prompt(npc: dict[str, Any]) -> str:
     if npc.get("conversation_style"):
         lines.append(f"How you speak: {npc['conversation_style']}.")
 
-    moods = ", ".join(sorted(VALID_MOODS))
     occupation = npc.get("occupation", "villager")
-    lines.append(
+    # Shared persona guidance for either output mode.
+    guidance = (
         "Speak plainly and concretely, like a real townsperson in conversation - "
         "1 to 2 short, direct sentences in a light medieval tone. Do NOT use "
         "flowery metaphors, riddles, or grand cosmic imagery, and do NOT keep "
@@ -524,15 +555,24 @@ def build_character_prompt(npc: dict[str, Any]) -> str:
         "trade and tools, the folk you deal with, your neighbours, and recent "
         "happenings. Answer the player's actual words directly. Never mention "
         "being an AI or a game, and never repeat your earlier lines word-for-word. "
-        "Respond ONLY with one JSON object exactly like this: "
-        '{"reply": "<what you say out loud>", '
-        f'"mood": "<your mood now, one of: {moods}>", '
-        '"sentiment_delta": <integer -10..10, how this exchange shifted your '
-        "feeling toward the player>, "
-        '"memory": "<one short sentence you will remember, or empty>"} '
-        'Always include all four fields. "reply" comes FIRST and must never be '
-        "empty or missing - an answer without \"reply\" is thrown away unheard."
     )
+    if LLM_STRUCTURED_OUTPUT:
+        moods = ", ".join(sorted(VALID_MOODS))
+        guidance += (
+            "Respond ONLY with one JSON object exactly like this: "
+            '{"reply": "<what you say out loud>", '
+            f'"mood": "<your mood now, one of: {moods}>", '
+            '"sentiment_delta": <integer -10..10, how this exchange shifted your '
+            "feeling toward the player>, "
+            '"memory": "<one short sentence you will remember, or empty>"} '
+            'Always include all four fields. "reply" comes FIRST and must never be '
+            "empty or missing - an answer without \"reply\" is thrown away unheard."
+        )
+    else:
+        # Day 8: the model writes only the spoken line; the backend computes the
+        # mood/sentiment/memory side-channel. No JSON, no schema grammar.
+        guidance += "Answer in 1-2 short, plain sentences, in character - nothing else."
+    lines.append(guidance)
     return "\n".join(lines)
 
 
@@ -583,11 +623,13 @@ def build_situation_block(
 def _history_messages(npc: dict[str, Any]) -> list[dict[str, str]]:
     """Prior exchanges replayed as native chat turns for the prompt prefix.
 
-    Assistant turns are wrapped back into the {"reply": ...} envelope the
-    model must produce - free in-context schooling against its habit of
-    dropping the field. The full stored history is used (append-only until
-    HISTORY_CAP) rather than a sliding window: a window that slides every
-    turn would shift every message and break the prefix cache each time.
+    Day 8 default (plain mode): assistant turns replay as the bare spoken line,
+    matching what the model is now asked to produce. Under LLM_STRUCTURED_OUTPUT
+    they are wrapped back into the {"reply": ...} envelope - free in-context
+    schooling against the old habit of dropping the field. The full stored
+    history is used (append-only until HISTORY_CAP) rather than a sliding window:
+    a window that slides every turn would shift every message and break the
+    prefix cache each time.
     """
     messages: list[dict[str, str]] = []
     for entry in npc.get("conversation_history", [])[-HISTORY_CAP:]:
@@ -596,13 +638,20 @@ def _history_messages(npc: dict[str, Any]) -> list[dict[str, str]]:
         if not player_text or not npc_response:
             continue
         messages.append({"role": "user", "content": player_text})
-        messages.append(
-            {
-                "role": "assistant",
-                "content": json.dumps({"reply": npc_response}, ensure_ascii=False),
-            }
+        content = (
+            json.dumps({"reply": npc_response}, ensure_ascii=False)
+            if LLM_STRUCTURED_OUTPUT
+            else npc_response
         )
+        messages.append({"role": "assistant", "content": content})
     return messages
+
+
+# Anti-repeat nudge appended to the retry's user message (both paths).
+_ANTI_REPEAT_NUDGE = (
+    "\nIMPORTANT: do NOT reuse the wording of your previous replies - "
+    "say something new that answers these exact words."
+)
 
 
 def converse_tier1(
@@ -611,19 +660,36 @@ def converse_tier1(
     player_text: str,
     rumor_texts: Optional[list[str]] = None,
 ) -> dict[str, Any]:
-    """One LLM conversation turn. Falls back to a stub if Ollama is down.
+    """One Tier 1 conversation turn. Falls back to a stub if Ollama is down.
 
-    Returns {"reply", "mood", "sentiment_delta", "memory", "used_llm"} with
-    every field already validated and display-safe. The call is retried once
-    (cheap - the prompt prefix is warm in the cache) when the model either
-    drops the "reply" field or parrots its previous line verbatim; the retry
-    carries an explicit anti-repeat nudge and a higher temperature. If the
-    retry misbehaves too, the first attempt's delta is used - a repeated or
-    salvaged line still beats a canned stub.
+    Always returns {"reply", "mood", "sentiment_delta", "memory", "used_llm"}
+    with every field validated and display-safe, so main._apply_conversation_delta
+    is path-agnostic.
 
-    Prompt shape serves the prefix cache: the static card (system) and stored
-    history (chat turns) are byte-identical between turns, so only the small
-    situation block and the player's new words cost prompt evaluation.
+    Day 8 default: the LLM writes ONLY the reply (plain text); the backend
+    computes the mood/sentiment/memory side-channel (cheaper input, cheaper
+    output, none of the JSON-envelope bugs). Set LLM_STRUCTURED_OUTPUT to run the
+    legacy single-call JSON path instead (model-authored memories, A/B latency).
+    """
+    if LLM_STRUCTURED_OUTPUT:
+        return _converse_tier1_structured(npc, player_name, player_text, rumor_texts)
+    return _converse_tier1_plain(npc, player_name, player_text, rumor_texts)
+
+
+def _converse_tier1_plain(
+    npc: dict[str, Any],
+    player_name: str,
+    player_text: str,
+    rumor_texts: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Day 8 plain-text path: the model speaks, the backend computes the rest.
+
+    The call is retried once (cheap - the prompt prefix is warm) when the model
+    parrots its previous line; the retry carries an anti-repeat nudge and a
+    higher temperature. If the retry parrots too, the first line is kept - a
+    repeated in-character line still beats a canned stub. The sentiment delta is
+    scored from the PLAYER's message, the mood drifts from it, and a memory is
+    recorded only when the exchange is significant.
     """
     system = build_character_prompt(npc)
     history = _history_messages(npc)
@@ -633,6 +699,67 @@ def converse_tier1(
     # Restate the player's CURRENT message as the very last thing the model
     # reads, and tell it not to answer an earlier turn - small models otherwise
     # carry conversational momentum and reply to the previous question.
+    base_user = (
+        build_situation_block(npc, player_name, rumor_texts, recalled_memories=recalled)
+        + f'\n{player_name} just said to you: "{player_text}"\n'
+        + f'Reply directly to that latest message ("{player_text}"), NOT to '
+        + "anything said earlier. Answer now in 1-2 short, plain sentences."
+    )
+    current_mood = npc.get("current_mood", "neutral")
+    stored_history = npc.get("conversation_history") or []
+    previous_reply = stored_history[-1].get("npc_response", "") if stored_history else ""
+
+    reply: Optional[str] = None
+    nudge = ""
+    for attempt in range(2):
+        raw = _call_llm(
+            system=system,
+            user=base_user + nudge,
+            json_format=False,
+            num_predict=CONVERSE_REPLY_NUM_PREDICT,
+            temperature=0.8 if attempt == 0 else 0.95,
+            history=history,
+            schema=None,
+        )
+        if raw is None:
+            break
+        candidate = _clean_plain_reply(raw, current_mood)
+        if not _is_parrot(candidate, previous_reply):
+            reply = candidate
+            break
+        if reply is None:
+            reply = candidate  # first line, kept in case the retry parrots too
+        nudge = _ANTI_REPEAT_NUDGE
+    if reply is None:
+        result = stub_converse(npc)
+        result["used_llm"] = False
+        return result
+
+    sentiment_delta = sentiment.score_sentiment(player_text)
+    mood = derive_post_exchange_mood(current_mood, sentiment_delta)
+    memory = build_conversation_memory(player_name, player_text, sentiment_delta)
+    return {
+        "reply": reply,
+        "mood": mood,
+        "sentiment_delta": sentiment_delta,
+        "memory": memory,
+        "used_llm": True,
+    }
+
+
+def _converse_tier1_structured(
+    npc: dict[str, Any],
+    player_name: str,
+    player_text: str,
+    rumor_texts: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Legacy Day 5-7 path: one schema-constrained JSON call carries the reply
+    plus the card delta. Retried once when the model drops "reply" or parrots;
+    the first attempt's delta is reused if the retry misbehaves too.
+    """
+    system = build_character_prompt(npc)
+    history = _history_messages(npc)
+    recalled = recall.recall_relevant(npc.get("memory_buffer", []), player_text, k=3)
     base_user = (
         build_situation_block(npc, player_name, rumor_texts, recalled_memories=recalled)
         + f'\n{player_name} just said to you: "{player_text}"\n'
@@ -664,16 +791,114 @@ def converse_tier1(
             return delta
         if fallback is None:
             fallback = delta
-        nudge = (
-            "\nIMPORTANT: do NOT reuse the wording of your previous replies - "
-            "say something new that answers these exact words."
-        )
+        nudge = _ANTI_REPEAT_NUDGE
     if fallback is not None:
         fallback["used_llm"] = True
         return fallback
     result = stub_converse(npc)
     result["used_llm"] = False
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Day 8 plain-text reply cleanup + computed side-channel (mood / memory)
+# --------------------------------------------------------------------------- #
+def _clean_plain_reply(raw: str, current_mood: str) -> str:
+    """Reduce raw model output to a bare spoken line.
+
+    The model is asked for plain prose, but a small model sometimes still wraps
+    it in a JSON envelope or quotes. Strip <think> blocks, any stray JSON,
+    wrapping quotes, and a leading "Day N:" stamp. Falls back to a safe
+    in-character line if nothing speakable survives (never returns empty).
+    """
+    text = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+    if text.startswith("{") or text.startswith("["):
+        data = _extract_json(text)
+        extracted = ""
+        if isinstance(data, dict):
+            for key in ("reply", "response", "text", "say", "speech", "dialogue", "answer"):
+                value = data.get(key)
+                if isinstance(value, str) and value.strip():
+                    extracted = value.strip()
+                    break
+        text = extracted or _fallback_reply(raw)
+    text = text.strip().strip('"').strip("'").strip()
+    text = re.sub(r"^\s*Day\s+\d+:\s*", "", text)
+    if not text or _looks_like_json_guts(text):
+        text = _safe_line(current_mood)
+    return text[:REPLY_MAX_CHARS].strip()
+
+
+def derive_post_exchange_mood(current_mood: str, sentiment_delta: int) -> str:
+    """Drift the NPC's mood from the exchange's sentiment - no model needed.
+
+    Shifts the current mood's valence along behavior.MOOD_VALENCE by the
+    sentiment delta, then snaps to the nearest EMITTABLE mood: a strong negative
+    delta drifts toward suspicious/angry, a positive one toward content/happy,
+    a near-zero delta holds. RESERVED_MOODS (grieving, fearful) are kept for
+    scripted story beats and are never emitted here.
+    """
+    emittable = {m: v for m, v in behavior.MOOD_VALENCE.items() if m not in RESERVED_MOODS}
+    current_v = behavior.MOOD_VALENCE.get(current_mood, 0.5)
+    target = current_v + (sentiment_delta / SENTIMENT_DELTA_LIMIT) * MOOD_DRIFT_SPAN
+    target = max(0.0, min(1.0, target))
+    # Nearest emittable mood by valence; ties hold the current mood (when itself
+    # emittable) so a near-zero drift never flips between equally close moods.
+    return min(
+        emittable,
+        key=lambda m: (abs(emittable[m] - target), 0 if m == current_mood else 1),
+    )
+
+
+# Common words stripped before building a memory's topic, so the keyworded line
+# carries the salient nouns the player actually raised (what TF-IDF recall matches).
+_MEMORY_STOPWORDS = {
+    "about", "after", "again", "could", "does", "doing", "have", "just", "know",
+    "like", "more", "much", "some", "tell", "than", "that", "them", "then",
+    "there", "they", "this", "want", "were", "what", "when", "where", "which",
+    "will", "with", "would", "your", "youre", "from", "into", "over", "very",
+    "been", "here", "need", "make", "made", "said", "should", "because",
+    "really", "still", "going", "thing", "things", "around", "yourself",
+}
+
+# Charged topics that make an exchange worth remembering even when the player's
+# tone stayed level (a calm question about a murder is still significant).
+_TOPIC_TRIGGERS = {
+    "murder", "murdered", "death", "dead", "kill", "killed", "demon", "cult",
+    "cultist", "blood", "plague", "flood", "fire", "war", "raid", "ghost",
+    "curse", "betray", "betrayal", "magistrate", "ashen", "treasure", "secret",
+    "witch", "poison", "stolen", "theft", "missing",
+}
+
+
+def build_conversation_memory(player_name: str, player_text: str, sentiment_delta: int) -> str:
+    """A significance-gated, keyworded memory line - or "" for trivial chatter.
+
+    Records only when the exchange matters: |sentiment_delta| crosses
+    MEMORY_SIGNIFICANCE_THRESHOLD, or the player named a charged topic. Templates
+    a line from the message's salient words so Day 8's TF-IDF recall has real
+    keywords to match later. The returned line carries NO "Day N:" stamp - the
+    caller (main._apply_conversation_delta) adds it. Seeds the Witness Memory
+    Tagger; trivial small-talk records nothing, keeping the deep buffer clean.
+    """
+    tokens = re.findall(r"[a-z']+", player_text.lower())
+    salient: list[str] = []
+    for token in tokens:
+        word = token.strip("'")
+        if len(word) >= 4 and word not in _MEMORY_STOPWORDS and word not in salient:
+            salient.append(word)
+    triggered = any(token in _TOPIC_TRIGGERS for token in tokens)
+    significant = abs(sentiment_delta) >= MEMORY_SIGNIFICANCE_THRESHOLD or triggered
+    if not significant or not salient:
+        return ""
+    topic = " ".join(salient[:3])
+    if sentiment_delta <= -MEMORY_SIGNIFICANCE_THRESHOLD:
+        verb = "pressed me about"
+    elif sentiment_delta >= MEMORY_SIGNIFICANCE_THRESHOLD:
+        verb = "spoke warmly with me about"
+    else:
+        verb = "asked me about"
+    return f"{player_name} {verb} {topic}"
 
 
 # --------------------------------------------------------------------------- #

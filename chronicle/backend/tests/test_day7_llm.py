@@ -82,6 +82,9 @@ def test_converse_tier1_passes_card_delta_schema(monkeypatch):
         captured.update(kwargs)
         return '{"reply": "Aye.", "mood": "content", "sentiment_delta": 0, "memory": ""}'
 
+    # The schema only rides the legacy structured path (Day 8 made plain text the
+    # default); exercise that path explicitly.
+    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
     monkeypatch.setattr(conversation, "_call_llm", fake_call)
     conversation.converse_tier1(_tier1_npc(), "Aldric", "Fine blade.")
     assert captured["schema"] is conversation.CARD_DELTA_SCHEMA
