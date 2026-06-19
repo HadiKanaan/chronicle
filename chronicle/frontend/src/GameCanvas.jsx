@@ -5,6 +5,8 @@ import {
   TILE_ATLAS,
   TILE_FALLBACK,
   PATH_TILE,
+  ROAD_TILES,
+  ROAD_ATLAS,
   BUILDING_ATLAS,
   DOOR_SPRITE,
   DECORATION_ATLAS,
@@ -403,17 +405,27 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
   }
 
   // Road network (static), drawn over the base ground and under everything
-  // else. The full tile set is collected first so decorations yield to roads
-  // (no tree sitting in the middle of a path).
-  const pathImg = images[PATH_TILE.src];
+  // else. Collect the full tile set first so each tile can autotile from its
+  // road neighbours and so decorations yield to roads (no tree on a path).
   const pathSet = new Set();
+  for (const road of gameState.paths ?? []) pathSet.add(`${road.x},${road.y}`);
+  const roadImg = images[ROAD_TILES.src];
+  const fallbackImg = images[PATH_TILE.src];
   for (const road of gameState.paths ?? []) {
-    pathSet.add(`${road.x},${road.y}`);
     if (road.x < startCol - 1 || road.x > endCol + 1 || road.y < startRow - 1 || road.y > endRow + 1) continue;
-    if (!pathImg) continue;
     const screenX = Math.round(road.x * DISPLAY_TILE - camX);
     const screenY = Math.round(road.y * DISPLAY_TILE - camY);
-    ctx.drawImage(pathImg, PATH_TILE.sx, PATH_TILE.sy, PATH_TILE.size, PATH_TILE.size, screenX, screenY, DISPLAY_TILE, DISPLAY_TILE);
+    if (roadImg) {
+      // Winding autotile: pick the piece matching which neighbours are road.
+      const mask = (pathSet.has(`${road.x},${road.y - 1}`) ? 1 : 0)
+        | (pathSet.has(`${road.x + 1},${road.y}`) ? 2 : 0)
+        | (pathSet.has(`${road.x},${road.y + 1}`) ? 4 : 0)
+        | (pathSet.has(`${road.x - 1},${road.y}`) ? 8 : 0);
+      const cell = ROAD_ATLAS[mask];
+      ctx.drawImage(roadImg, cell.sx, cell.sy, ROAD_TILES.size, ROAD_TILES.size, screenX, screenY, DISPLAY_TILE, DISPLAY_TILE);
+    } else if (fallbackImg) {
+      ctx.drawImage(fallbackImg, PATH_TILE.sx, PATH_TILE.sy, PATH_TILE.size, PATH_TILE.size, screenX, screenY, DISPLAY_TILE, DISPLAY_TILE);
+    }
   }
 
   // Decoration scatter (static, beneath characters), aspect-correct + sized up.

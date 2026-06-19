@@ -111,11 +111,16 @@ def main() -> None:
     door.save(door_dst)
     print(f"  {'door.png':22s} <- Door_Normal_Wood.png[0]   {door.size}")
 
-    print("spritesheet (road tiles):")
+    print("spritesheet (kenney, fallback dirt tile):")
     sheet_dst = os.path.join(ASSETS, "tiles", "kenney_rts.png")
     os.makedirs(os.path.dirname(sheet_dst), exist_ok=True)
     shutil.copyfile(KENNEY_SHEET, sheet_dst)
     print(f"  {'kenney_rts.png':22s} <- medievalRTS_spritesheet.png")
+
+    print("road autotile (Fan-tasy, 16-tile):")
+    road_dst = os.path.join(ASSETS, "tiles", "road_tiles.png")
+    shutil.copyfile(os.path.join(FANTASY_ART, "Ground Tileset", "Tileset_Road.png"), road_dst)
+    print(f"  {'road_tiles.png':22s} <- Tileset_Road.png")
 
     print("characters (6-frame walk/run sheets, copied raw):")
     for name, src in CHARACTERS.items():

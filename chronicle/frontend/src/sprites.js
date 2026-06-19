@@ -23,11 +23,32 @@ export const TILE_ATLAS = {
 
 export const TILE_FALLBACK = { color: '#5c8c48' };
 
-// Dirt road tile from the kenney medieval-RTS spritesheet (the solid-dirt cell
-// at 320,64 in the 550x550 sheet, 64px source). Drawn on each generated path
-// tile to lay roads between buildings. `size` is the source cell size (64), not
-// the 16px Fan-tasy terrain tiles.
+// Fallback solid-dirt tile (kenney) for any road piece that fails to load.
 export const PATH_TILE = { src: '/assets/tiles/kenney_rts.png', sx: 320, sy: 64, size: 64 };
+
+// Winding dirt-road autotile (Fan-tasy Tileset_Road, 16px cells). Indexed by a
+// 4-bit connection mask of which orthogonal neighbours are also road
+// (N=1, E=2, S=4, W=8); the value is the source cell offset. Built from the
+// tileset's 4x4 connection block (cols 0-3, rows 0-3).
+export const ROAD_TILES = { src: '/assets/tiles/road_tiles.png', size: 16 };
+export const ROAD_ATLAS = [
+  { sx: 0, sy: 48 },  // 0  none
+  { sx: 0, sy: 32 },  // 1  N
+  { sx: 16, sy: 48 }, // 2  E
+  { sx: 16, sy: 32 }, // 3  NE
+  { sx: 0, sy: 0 },   // 4  S
+  { sx: 0, sy: 16 },  // 5  NS
+  { sx: 16, sy: 0 },  // 6  ES
+  { sx: 16, sy: 16 }, // 7  NES
+  { sx: 48, sy: 48 }, // 8  W
+  { sx: 48, sy: 32 }, // 9  NW
+  { sx: 32, sy: 48 }, // 10 EW
+  { sx: 32, sy: 32 }, // 11 NEW
+  { sx: 48, sy: 0 },  // 12 SW
+  { sx: 48, sy: 16 }, // 13 NSW
+  { sx: 32, sy: 0 },  // 14 ESW
+  { sx: 32, sy: 16 }, // 15 NESW
+];
 
 // building_type -> a front-view structure sprite blitted over the footprint,
 // above the wall/floor tiles (the fallback when a sprite is missing). Detailed
@@ -114,5 +135,6 @@ export function allImageSources() {
   }
   if (DOOR_SPRITE.src) sources.add(DOOR_SPRITE.src);
   if (PATH_TILE.src) sources.add(PATH_TILE.src);
+  if (ROAD_TILES.src) sources.add(ROAD_TILES.src);
   return [...sources];
 }
