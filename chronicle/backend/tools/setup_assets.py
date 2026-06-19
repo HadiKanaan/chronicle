@@ -45,21 +45,26 @@ CHARACTERS = {
     "rogue.png": os.path.join(PC, "Npc's", "Rogue", "Run", "Run-Sheet.png"),
     "wizard.png": os.path.join(PC, "Npc's", "Wizzard", "Run", "Run-Sheet.png"),
 }
-FANTASY_DOOR = os.path.join(
-    PACK_ROOT, "The Fan-tasy Tileset (Free) 1.5.7", "The Fan-tasy Tileset (Free)",
-    "Art", "Buildings", "Animations", "Door_Normal_Wood.png",
+FANTASY_ART = os.path.join(
+    PACK_ROOT, "The Fan-tasy Tileset (Free) 1.5.7", "The Fan-tasy Tileset (Free)", "Art",
 )
+FANTASY_DOOR = os.path.join(FANTASY_ART, "Buildings", "Animations", "Door_Normal_Wood.png")
 
-# building_type -> source structure sprite (chosen by eye for role-readability:
-# barrel/sign tavern, forge-chimney smithy, striped market stall, cross chapel,
-# crenellated gatehouse hall, simple green-roof cottage).
-BUILDINGS = {
-    "tavern": "medievalStructure_23.png",
-    "blacksmith": "medievalStructure_20.png",
-    "market": "medievalStructure_22.png",
-    "church": "medievalStructure_04.png",
-    "magistrate_hall": "medievalStructure_02.png",
-    "house": "medievalStructure_16.png",
+# Detailed Fan-tasy buildings (dest filename -> source). Two house variants for
+# residential variety, the 2-storey inn as the tavern, the forge as the smithy.
+FANTASY_BUILDINGS = {
+    "house_1.png": "House_Hay_1.png",
+    "house_2.png": "House_Hay_2.png",
+    "tavern.png": "House_Hay_4_Purple.png",
+    "blacksmith.png": "House_Hay_3.png",
+}
+
+# Kept as kenney structures for their distinct civic silhouettes (striped market
+# stall, cross-topped chapel, crenellated gatehouse) the Fan-tasy set lacks.
+KENNEY_BUILDINGS = {
+    "market.png": "medievalStructure_22.png",
+    "church.png": "medievalStructure_04.png",
+    "magistrate_hall.png": "medievalStructure_02.png",
 }
 
 # decoration_type -> source environment sprite.
@@ -87,9 +92,13 @@ def main() -> None:
     print(f"pack root : {PACK_ROOT}")
     print(f"assets    : {ASSETS}")
 
-    print("buildings:")
-    for name, src in BUILDINGS.items():
-        _copy_trimmed(os.path.join(KENNEY_STRUCT, src), os.path.join(ASSETS, "buildings", f"{name}.png"))
+    print("buildings (Fan-tasy, detailed):")
+    fantasy_buildings = os.path.join(FANTASY_ART, "Buildings")
+    for name, src in FANTASY_BUILDINGS.items():
+        _copy_trimmed(os.path.join(fantasy_buildings, src), os.path.join(ASSETS, "buildings", name))
+    print("buildings (kenney, civic):")
+    for name, src in KENNEY_BUILDINGS.items():
+        _copy_trimmed(os.path.join(KENNEY_STRUCT, src), os.path.join(ASSETS, "buildings", name))
 
     print("decorations:")
     for name, src in DECORATIONS.items():

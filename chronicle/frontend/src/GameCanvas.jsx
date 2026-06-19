@@ -527,7 +527,12 @@ function drawTile(ctx, images, type, screenX, screenY) {
 }
 
 function drawBuilding(ctx, images, building, camX, camY, alpha = 1) {
-  const entry = BUILDING_ATLAS[building.building_type];
+  let entry = BUILDING_ATLAS[building.building_type];
+  // `house` is a list of variants; pick one stably from the footprint position
+  // so a given plot always shows the same house but neighbours differ.
+  if (Array.isArray(entry)) {
+    entry = entry[(building.x * 31 + building.y) % entry.length];
+  }
   const image = entry ? images[entry.src] : undefined;
   if (!image) return; // wall/floor tiles remain the fallback
   // The sprite is pre-trimmed to its art, so filling the footprint reads as the

@@ -38,22 +38,25 @@ NAMES_PATH = BASE_DIR / "data" / "names.json"
 
 REGION_ID = "region_aldenmoor"
 REGION_NAME = "Aldenmoor"
-GRID_W = 48
-GRID_H = 48
+# Day 8 expansion: a much larger town (was 48x48) so the world reads as a real
+# place to wander, not a cramped village.
+GRID_W = 64
+GRID_H = 64
 
 TIER1_COUNT = 10
 TIER2_COUNT = 30
 TIER3_COUNT = 40
 
-# Civic buildings: (building_id, display name, type, width, height).
+# Civic buildings: (building_id, display name, type, width, height). Footprints
+# enlarged for the detailed Fan-tasy/kenney sprites drawn over them.
 CIVIC_BUILDINGS = [
-    ("bld_tavern", "The Gilded Tankard", "tavern", 6, 5),
-    ("bld_smithy", "Vane Smithy", "blacksmith", 5, 4),
+    ("bld_tavern", "The Gilded Tankard", "tavern", 7, 6),
+    ("bld_smithy", "Vane Smithy", "blacksmith", 6, 5),
     ("bld_market", "Aldenmoor Market", "market", 6, 5),
-    ("bld_church", "Chapel of the Ashen Light", "church", 6, 6),
-    ("bld_hall", "Magistrate Hall", "magistrate_hall", 6, 5),
+    ("bld_church", "Chapel of the Ashen Light", "church", 7, 6),
+    ("bld_hall", "Magistrate Hall", "magistrate_hall", 7, 5),
 ]
-HOUSE_COUNT = 10
+HOUSE_COUNT = 18
 
 # Occupation -> civic building type the NPC works at.
 OCC_WORKPLACE = {
@@ -191,10 +194,11 @@ def _generate_layout(
 ) -> tuple[list[Building], dict[str, tuple[int, int]], list[tuple[int, int]]]:
     """Place civic buildings (best plots first) then houses. Uses the civ-seed model
     to rank settlement plots so structures cluster where settlement is plausible."""
-    # Candidate anchor grid east of the river.
+    # Candidate anchor grid east of the river. Spacing scales with the larger
+    # map so the bigger footprints get clearance and the town spreads out.
     plots: list[tuple[int, int]] = []
-    for ay in range(4, GRID_H - 8, 8):
-        for ax in range(14, GRID_W - 8, 9):
+    for ay in range(4, GRID_H - 9, 9):
+        for ax in range(14, GRID_W - 9, 10):
             plots.append((ax, ay))
 
     scored = [
@@ -210,7 +214,7 @@ def _generate_layout(
 
     queue: list[tuple[str, str, str, int, int]] = list(CIVIC_BUILDINGS)
     for i in range(HOUSE_COUNT):
-        queue.append((f"bld_house_{i:02d}", f"House {i + 1}", "house", 3, 3))
+        queue.append((f"bld_house_{i:02d}", f"House {i + 1}", "house", 4, 4))
 
     plot_idx = 0
     for b_id, name, btype, w, h in queue:

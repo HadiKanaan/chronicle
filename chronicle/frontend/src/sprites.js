@@ -29,17 +29,21 @@ export const TILE_FALLBACK = { color: '#5c8c48' };
 // the 16px Fan-tasy terrain tiles.
 export const PATH_TILE = { src: '/assets/tiles/kenney_rts.png', sx: 320, sy: 64, size: 64 };
 
-// building_type -> a single front-view structure sprite (Kenney medieval-RTS).
-// The renderer blits one sprite over each building's footprint, above the
-// wall/floor tiles (which remain the fallback when a sprite is missing). Each
-// sprite is its own full image, so only the src is needed.
+// building_type -> a front-view structure sprite blitted over the footprint,
+// above the wall/floor tiles (the fallback when a sprite is missing). Detailed
+// Fan-tasy houses/tavern/smithy; kenney civic landmarks for their distinct
+// silhouettes. `house` is an array of variants picked per-building so the
+// residential blocks aren't identical.
 export const BUILDING_ATLAS = {
   tavern: { src: '/assets/buildings/tavern.png' },
   blacksmith: { src: '/assets/buildings/blacksmith.png' },
   market: { src: '/assets/buildings/market.png' },
   church: { src: '/assets/buildings/church.png' },
   magistrate_hall: { src: '/assets/buildings/magistrate_hall.png' },
-  house: { src: '/assets/buildings/house.png' },
+  house: [
+    { src: '/assets/buildings/house_1.png' },
+    { src: '/assets/buildings/house_2.png' },
+  ],
 };
 
 // A wooden door drawn over each building's entrance tile so the (walkable) gap
@@ -101,7 +105,9 @@ export function allImageSources() {
     if (entry.src) sources.add(entry.src);
   }
   for (const entry of Object.values(BUILDING_ATLAS)) {
-    if (entry.src) sources.add(entry.src);
+    for (const variant of Array.isArray(entry) ? entry : [entry]) {
+      if (variant.src) sources.add(variant.src);
+    }
   }
   for (const entry of Object.values(DECORATION_ATLAS)) {
     if (entry.src) sources.add(entry.src);
