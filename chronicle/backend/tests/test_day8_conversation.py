@@ -160,6 +160,19 @@ def test_plain_path_never_raises_on_non_json_output(monkeypatch):
         assert "mood" in result and "sentiment_delta" in result
 
 
+def test_player_name_is_not_peppered_through_the_turn(monkeypatch):
+    # A player named like a townsperson (e.g. "Ceth Blaine") was getting echoed
+    # back / referred to in the third person because the prompt named them 3x.
+    # The instruction tail must name them at most once and forbid the echo.
+    calls = []
+    monkeypatch.setattr(conversation, "_call_llm", lambda **kw: calls.append(kw) or "I'm Mara, the smith.")
+    npc = _tier1_npc(mood_reason="after the last conversation")
+    conversation.converse_tier1(npc, "Ceth Blaine", "what is your name?", ["a town rumor"])
+    user = calls[0]["user"].lower()
+    assert calls[0]["user"].count("Ceth Blaine") <= 1, "player name should appear at most once"
+    assert "third person" in user and "their name" in user  # explicit anti-echo guidance
+
+
 def test_plain_path_falls_back_to_stub_when_llm_down(monkeypatch):
     monkeypatch.setattr(conversation, "_call_llm", lambda **kwargs: None)
     result = conversation.converse_tier1(_tier1_npc(), "Aldric", "Hello?")

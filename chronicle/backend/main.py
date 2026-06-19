@@ -1059,7 +1059,10 @@ def _apply_conversation_delta(
         if npc is None:
             return None
         npc["current_mood"] = delta.get("mood", npc.get("current_mood", "neutral"))
-        npc["mood_reason"] = f"after speaking with {player_name}"
+        # Deliberately name-free: the player's name appearing in the prompt's mood
+        # line was one of several spots a small model echoed it back / spoke about
+        # the player in the third person. Disposition still carries it once.
+        npc["mood_reason"] = "after the last conversation"
         sentiment = int(npc.get("player_sentiment", 50)) + int(delta.get("sentiment_delta", 0))
         npc["player_sentiment"] = max(0, min(100, sentiment))
         if delta.get("memory"):

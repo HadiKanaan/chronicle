@@ -381,7 +381,7 @@ def test_apply_conversation_delta_persists_card_changes(temp_db):
     assert updated["current_mood"] == "happy"
     assert stored["current_mood"] == "happy"
     assert stored["player_sentiment"] == 70  # 62 + 8
-    assert stored["mood_reason"] == "after speaking with Aldric Snow"
+    assert stored["mood_reason"] == "after the last conversation"
     assert any("a kind word" in memory for memory in stored["memory_buffer"])
     assert stored["conversation_history"][-1]["player_text"] == "Good work!"
     assert stored["conversation_history"][-1]["npc_response"] == "Aye."

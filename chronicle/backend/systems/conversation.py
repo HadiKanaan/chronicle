@@ -755,9 +755,10 @@ def _converse_tier1_plain(
     # carry conversational momentum and reply to the previous question.
     base_user = (
         build_situation_block(npc, player_name, rumor_texts, recalled_memories=recalled)
-        + f'\n{player_name} just said to you: "{player_text}"\n'
-        + f'Reply directly to that latest message ("{player_text}"), NOT to '
-        + "anything said earlier. Answer now in 1-2 short, plain sentences."
+        + f'\nThe traveller you are speaking with just said to you: "{player_text}"\n'
+        + "Reply to that latest message, not to anything said earlier, in 1-2 short, "
+        + "plain sentences. Speak TO them directly - do NOT repeat their name back or "
+        + "talk about them in the third person."
     )
     current_mood = npc.get("current_mood", "neutral")
     stored_history = npc.get("conversation_history") or []
@@ -816,9 +817,10 @@ def _converse_tier1_structured(
     recalled = recall.recall_relevant(npc.get("memory_buffer", []), player_text, k=3)
     base_user = (
         build_situation_block(npc, player_name, rumor_texts, recalled_memories=recalled)
-        + f'\n{player_name} just said to you: "{player_text}"\n'
-        + f'Reply directly to that latest message ("{player_text}"), NOT to '
-        + 'anything said earlier. Respond now with the JSON object, "reply" first.'
+        + f'\nThe traveller you are speaking with just said to you: "{player_text}"\n'
+        + "Reply to that latest message, not to anything said earlier. Speak TO them - "
+        + "do NOT repeat their name back or talk about them in the third person. "
+        + 'Respond now with the JSON object, "reply" first.'
     )
     current_mood = npc.get("current_mood", "neutral")
     stored_history = npc.get("conversation_history") or []
