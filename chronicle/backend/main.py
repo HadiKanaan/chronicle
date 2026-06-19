@@ -1113,7 +1113,8 @@ def _run_conversation_inner(npc_id: str, player_text: str) -> dict[str, Any]:
     day = int(state.get("current_day", 1))
     hour = int(state.get("current_hour", 6))
 
-    if int(npc.get("tier", 3)) == 1:
+    tier1 = int(npc.get("tier", 3)) == 1
+    if tier1:
         # Day 6: dialogue is rumor-aware - the prompt carries the actual texts
         # of rumors this NPC knows, not a count placeholder.
         rumor_texts = rumors.known_rumor_texts(npc, get_active_rumors())
@@ -1125,6 +1126,13 @@ def _run_conversation_inner(npc_id: str, player_text: str) -> dict[str, Any]:
     if updated is None:
         raise HTTPException(status_code=404, detail="Unknown NPC")
     log_event(day, hour, "conversation", f"{player_name} spoke with {updated['name']}.")
+    # Re-warm the NEXT turn's prefix now: applying the delta grew this NPC's
+    # history, which invalidated the open-time warm, so without this only the
+    # first turn of a conversation is warm. While the player reads this reply and
+    # types the next one, the new prompt prefix pre-evaluates in the background,
+    # keeping follow-up turns warm too (the dedup guard prevents pile-ups).
+    if tier1:
+        _prewarm_conversation(npc_id)
 
     # Display-ready contract: the parsed reply and the post-delta mood only.
     # The raw card-delta JSON never leaves the backend.

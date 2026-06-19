@@ -6,7 +6,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:8000'
+      // 127.0.0.1, not "localhost": uvicorn binds IPv4, but on Windows "localhost"
+      // resolves to IPv6 (::1) first and stalls ~2s per request before falling
+      // back to IPv4. Hitting the IPv4 address directly removes that delay.
+      '/api': 'http://127.0.0.1:8000'
     }
   },
   build: {
