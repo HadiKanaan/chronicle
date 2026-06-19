@@ -88,6 +88,12 @@ class CharacterCard(BaseModel):
     conversation_style: str = ""
     llm_enriched: bool = False
     conversation_history: list[dict[str, Any]] = Field(default_factory=list)
+    # Day 8 (dynamic tiers / "LRU of personhood"): how many times the player has
+    # conversed with this NPC - enough conversations promote a background villager
+    # to Tier 1 - and a wall-clock stamp of the last such exchange, which drives
+    # LRU demotion of the least-recently-talked-to Tier 1. 0 = never spoken to.
+    player_conversation_count: int = 0
+    last_talked_stamp: float = 0.0
     current_behavior: BehaviorState = BehaviorState.WORKING
     # Cached BFS route toward the current behavior's destination; recomputed
     # each in-game hour, popped one step per movement sub-tick.

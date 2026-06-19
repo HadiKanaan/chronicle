@@ -60,6 +60,7 @@ from systems import (
     props,
     relationships,
     rumors,
+    tiers,
     weather,
     world_gen,
 )
@@ -89,6 +90,17 @@ REAL_SECONDS_PER_MOVE_STEP = 1.0
 MOVE_STEPS_PER_HOUR = max(1, int(REAL_SECONDS_PER_GAME_HOUR / REAL_SECONDS_PER_MOVE_STEP))
 
 _tick_rng = random.Random()
+
+# Day 8 dynamic tiers: the names.json trait/trauma pools that seed a promoted
+# NPC's personhood. Loaded once and cached - they never change at runtime.
+_name_pools_cache: Optional[dict[str, Any]] = None
+
+
+def _name_pools() -> dict[str, Any]:
+    global _name_pools_cache
+    if _name_pools_cache is None:
+        _name_pools_cache = tiers.load_name_pools()
+    return _name_pools_cache
 
 # Day 7 fog of war: tiles within this Euclidean radius of the player host NPC
 # are 'visible' right now; tiles seen before are 'explored' (dimmed); the rest
@@ -550,6 +562,34 @@ def _warm_llm_and_enrich_tier1() -> None:
         enriched += 1
     if enriched:
         log_event(0, 0, "llm", f"LLM enriched {enriched} Tier 1 character card(s).")
+
+
+def _enrich_one_tier1(npc_id: str) -> None:
+    """Enrich a single freshly-promoted Tier 1 card (Day 8 dynamic tiers).
+
+    Mirrors _warm_llm_and_enrich_tier1 for one NPC, kicked on a daemon thread at
+    promotion: the slow generate call rides conversation's single-call queue
+    OUTSIDE _sim_lock, and only the card's read-modify-write holds the lock. Until
+    it lands the promoted card serves its seeded placeholder traits (the "stub"),
+    so the player never waits on enrichment. Idempotent: a card already enriched
+    (e.g. re-promoted) is left untouched.
+    """
+    if not conversation.llm_available():
+        return
+    npc = get_npc(npc_id)
+    if npc is None or npc.get("llm_enriched"):
+        return
+    details = conversation.generate_card_details(npc)
+    if details is None:
+        return
+    with _sim_lock:
+        fresh = get_npc(npc_id)
+        if fresh is None:
+            return
+        fresh.update(details)
+        fresh["llm_enriched"] = True
+        save_npc(fresh)
+    log_event(0, 0, "llm", f"LLM enriched promoted character {npc.get('name', npc_id)}.")
 
 
 @asynccontextmanager
@@ -1082,6 +1122,42 @@ def _apply_conversation_delta(
         return npc
 
 
+def _apply_tiering(npc_id: str, day: int, hour: int) -> dict[str, Any]:
+    """Day 8 dynamic personhood, run after a conversation under _sim_lock.
+
+    Bumps the NPC's player-conversation count + last-talked stamp, then promotes
+    it to Tier 1 once it has earned personhood (seeding traits + linking the
+    Tier-1 social graph) and demotes the least-recently-talked-to Tier 1 to hold
+    the ~10 cap. Holds the lock for the whole read-modify-write of every affected
+    card - exactly like _apply_conversation_delta - so the hourly tick's bulk
+    save can never silently overwrite a promotion/demotion. Returns the tiers
+    result ({changed, promoted, demoted, enrich}).
+    """
+    empty = {"changed": [], "promoted": None, "demoted": None, "enrich": None}
+    with _sim_lock:
+        npc = get_npc(npc_id)
+        if npc is None:
+            return empty
+        result = tiers.apply_conversation_tiering(
+            npc, get_all_npcs(), _name_pools(), _tick_rng, time.time()
+        )
+        # npc is always first in `changed`; persist it and every other card the
+        # promotion/demotion touched (linked peers + the demoted Tier 1).
+        for card in result["changed"]:
+            save_npc(card)
+        if result["promoted"] is not None:
+            log_event(
+                day, hour, "promotion",
+                f"{npc.get('name', npc_id)} has become a person of note in Aldenmoor.",
+            )
+        if result["demoted"] is not None:
+            log_event(
+                day, hour, "demotion",
+                f"{result['demoted'].get('name', '?')} fades back into the crowd.",
+            )
+    return result
+
+
 def _run_conversation(npc_id: str, player_text: str) -> dict[str, Any]:
     """One full conversation turn (runs on a worker thread).
 
@@ -1126,12 +1202,27 @@ def _run_conversation_inner(npc_id: str, player_text: str) -> dict[str, Any]:
     if updated is None:
         raise HTTPException(status_code=404, detail="Unknown NPC")
     log_event(day, hour, "conversation", f"{player_name} spoke with {updated['name']}.")
+
+    # Day 8 dynamic tiers: this conversation bumps the NPC's count + last-talked
+    # stamp and may promote a background villager to Tier 1 (demoting the LRU
+    # Tier 1 to hold the cap), all under _sim_lock inside _apply_tiering. A
+    # freshly-promoted, never-enriched card is queued for LLM enrichment on a
+    # daemon thread (single-call queue + lock discipline); it serves its seeded
+    # placeholder traits until that lands.
+    tier_result = _apply_tiering(npc_id, day, hour)
+    if tier_result.get("enrich") is not None:
+        threading.Thread(
+            target=_enrich_one_tier1, args=(tier_result["enrich"]["id"],), daemon=True
+        ).start()
+
     # Re-warm the NEXT turn's prefix now: applying the delta grew this NPC's
     # history, which invalidated the open-time warm, so without this only the
     # first turn of a conversation is warm. While the player reads this reply and
     # types the next one, the new prompt prefix pre-evaluates in the background,
-    # keeping follow-up turns warm too (the dedup guard prevents pile-ups).
-    if tier1:
+    # keeping follow-up turns warm too (the dedup guard prevents pile-ups). A
+    # just-promoted NPC is now Tier 1, so warm it too even though it was Tier 2/3
+    # when this turn began.
+    if tier1 or tier_result.get("promoted") is not None:
         _prewarm_conversation(npc_id)
 
     # Display-ready contract: the parsed reply and the post-delta mood only.
