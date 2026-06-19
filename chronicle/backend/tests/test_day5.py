@@ -13,77 +13,6 @@ from ml import train as ml
 from systems import conversation
 
 
-# --------------------------------------------------------------------------- #
-# Card-delta parsing and repair
-# --------------------------------------------------------------------------- #
-def test_parse_card_delta_valid_json():
-    raw = '{"reply": "Aye, fine day.", "mood": "content", "sentiment_delta": 3, "memory": "met a stranger"}'
-    delta = conversation.parse_card_delta(raw, "neutral")
-    assert delta == {
-        "reply": "Aye, fine day.",
-        "mood": "content",
-        "sentiment_delta": 3,
-        "memory": "met a stranger",
-        "reply_was_genuine": True,
-    }
-
-
-def test_parse_card_delta_repairs_think_tags_and_trailing_comma():
-    raw = '<think>reasoning leak</think>{"reply": "Hm.", "mood": "anxious", "sentiment_delta": -2,}'
-    delta = conversation.parse_card_delta(raw, "neutral")
-    assert delta["reply"] == "Hm."
-    assert delta["mood"] == "anxious"
-    assert delta["sentiment_delta"] == -2
-    assert "reasoning leak" not in delta["reply"]
-
-
-def test_parse_card_delta_invalid_mood_falls_back_to_ml_model():
-    raw = '{"reply": "Bah.", "mood": "bemused", "sentiment_delta": 50}'
-    delta = conversation.parse_card_delta(raw, "neutral")
-    assert delta["mood"] in conversation.VALID_MOODS
-    # Out-of-range delta is clamped, never trusted raw.
-    assert delta["sentiment_delta"] == conversation.SENTIMENT_DELTA_LIMIT
-
-
-def test_parse_card_delta_garbage_is_a_safe_noop():
-    delta = conversation.parse_card_delta("not json at all", "angry")
-    assert delta["reply"]  # something speakable survives
-    assert delta["mood"] == "angry"  # mood untouched
-    assert delta["sentiment_delta"] == 0
-    assert delta["memory"] == ""
-
-
-def test_parse_card_delta_salvages_reply_from_broken_envelope():
-    raw = '{"reply": "The river took my brother.", "mood": "grie'  # truncated output
-    delta = conversation.parse_card_delta(raw, "neutral")
-    assert delta["reply"] == "The river took my brother."
-
-
-def test_parse_card_delta_salvages_memory_as_reply_when_reply_dropped():
-    # Observed live with qwen3:4b (measured ~30-60% of calls on Day 6): the
-    # model drops "reply" and the spoken answer lands in "memory" instead.
-    raw = '{"mood": "content", "sentiment_delta": 0, "memory": "Fyra showed me a dagger."}'
-    delta = conversation.parse_card_delta(raw, "content")
-    assert delta["reply"] == "Fyra showed me a dagger."  # memory-field rescue
-    assert delta["memory"] == "Fyra showed me a dagger."
-    assert delta["reply_was_genuine"] is False  # signals converse_tier1 to retry
-
-
-def test_parse_card_delta_safe_line_when_reply_and_memory_both_unusable():
-    raw = '{"mood": "content", "sentiment_delta": 0, "memory": ""}'
-    delta = conversation.parse_card_delta(raw, "content")
-    assert delta["reply"]  # a safe in-character line
-    assert '"mood"' not in delta["reply"]
-    assert delta["reply_was_genuine"] is False
-
-
-def test_parse_card_delta_never_leaks_json_from_unparseable_fragments():
-    raw = '"mood": "content",\n  "sentiment_delta": 0,\n  "memory": "broken"'
-    delta = conversation.parse_card_delta(raw, "neutral")
-    assert '"sentiment_delta"' not in delta["reply"]
-    assert delta["reply"]
-
-
 def test_remember_refreshes_duplicate_memories_instead_of_stacking():
     from systems import behavior
 
@@ -151,15 +80,12 @@ def _tier1_npc(**overrides):
     return npc
 
 
-def test_character_prompt_is_static_and_carries_the_card(monkeypatch):
-    # The JSON contract only appears on the legacy structured path (Day 8 made
-    # plain text the default); exercise it here.
-    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
+def test_character_prompt_is_static_and_carries_the_card():
     prompt = conversation.build_character_prompt(_tier1_npc())
     assert "Mara Vane" in prompt
     assert "blacksmith" in prompt
     assert "resentful of the magistrate" in prompt
-    assert '"sentiment_delta"' in prompt  # card-delta JSON contract requested
+    assert "one or two short sentences" in prompt  # plain-text instruction (no JSON contract)
     # Volatile state must stay OUT of the system prompt: it has to remain
     # byte-identical between turns or the Ollama prefix cache is useless.
     assert "Current mood" not in prompt
@@ -179,18 +105,11 @@ def test_situation_block_carries_volatile_context():
     assert "Cultists struck the market." in block  # rumor texts surfaced
 
 
-def test_history_replays_as_chat_turns_with_reply_envelope(monkeypatch):
-    import json
-
-    # The {"reply": ...} envelope is the structured path's in-context schooling;
-    # the Day 8 default replays the bare spoken line instead.
-    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
+def test_history_replays_as_plain_chat_turns():
     messages = conversation._history_messages(_tier1_npc())
     assert messages[0] == {"role": "user", "content": "Hello."}
-    assert messages[1]["role"] == "assistant"
-    # Replayed in the required envelope: in-context schooling for the model's
-    # habit of dropping the "reply" field.
-    assert json.loads(messages[1]["content"]) == {"reply": "Hm. You again."}
+    # The assistant turn replays as the bare spoken line - what the model produces.
+    assert messages[1] == {"role": "assistant", "content": "Hm. You again."}
 
 
 def test_converse_tier1_splits_static_prefix_from_volatile_user_block(monkeypatch):
@@ -198,7 +117,7 @@ def test_converse_tier1_splits_static_prefix_from_volatile_user_block(monkeypatc
 
     def fake_call(**kwargs):
         captured.update(kwargs)
-        return '{"reply": "Aye.", "mood": "content", "sentiment_delta": 0, "memory": ""}'
+        return "Aye."
 
     monkeypatch.setattr(conversation, "_call_llm", fake_call)
     conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "Fine blade.", ["a rumor"])
@@ -207,51 +126,6 @@ def test_converse_tier1_splits_static_prefix_from_volatile_user_block(monkeypatc
     assert "a rumor" in captured["user"]
     assert "Fine blade." in captured["user"]
     assert "Current mood" not in captured["system"]  # system stays cacheable
-
-
-def test_converse_tier1_parses_llm_output(monkeypatch):
-    raw = '{"reply": "State your business.", "mood": "suspicious", "sentiment_delta": -1, "memory": "a stranger pried"}'
-    # Reply + model-authored mood come from one JSON call on the structured path.
-    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
-    monkeypatch.setattr(conversation, "_call_llm", lambda **kwargs: raw)
-    result = conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "What do you forge?")
-    assert result["used_llm"] is True
-    assert result["reply"] == "State your business."
-    assert result["mood"] == "suspicious"
-
-
-def test_converse_tier1_retries_once_when_reply_dropped(monkeypatch):
-    responses = iter(
-        [
-            '{"mood": "content", "sentiment_delta": 0, "memory": "answer hid in memory"}',
-            '{"reply": "Aye, the forge burns hot.", "mood": "content", "sentiment_delta": 1, "memory": ""}',
-        ]
-    )
-    calls = []
-    # Reply-field salvage + retry is structured-path behavior (the JSON envelope
-    # is what can drop "reply"); plain text has no field to drop.
-    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
-    monkeypatch.setattr(
-        conversation, "_call_llm", lambda **kwargs: calls.append(1) or next(responses)
-    )
-    result = conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "How's the forge?")
-    assert len(calls) == 2  # dropped reply triggered exactly one retry
-    assert result["reply"] == "Aye, the forge burns hot."
-    assert result["used_llm"] is True
-    assert "reply_was_genuine" not in result  # internal flag never leaves
-
-
-def test_converse_tier1_uses_first_salvage_when_retry_also_drops_reply(monkeypatch):
-    raw = '{"mood": "content", "sentiment_delta": 0, "memory": "The river keeps its secrets."}'
-    calls = []
-    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
-    monkeypatch.setattr(
-        conversation, "_call_llm", lambda **kwargs: calls.append(1) or raw
-    )
-    result = conversation.converse_tier1(_tier1_npc(), "Aldric Snow", "Any secrets?")
-    assert len(calls) == 2  # exactly one retry, never more
-    assert result["reply"] == "The river keeps its secrets."  # memory-field rescue
-    assert result["used_llm"] is True
 
 
 def test_is_parrot_matches_near_identical_lines():
@@ -272,9 +146,8 @@ def test_converse_tier1_retries_when_model_parrots_its_previous_line(monkeypatch
     )
     responses = iter(
         [
-            # Observed live: identical line for a different question.
-            '{"reply": "The shadows hunger tonight, Fyra.", "mood": "suspicious", "sentiment_delta": 0, "memory": ""}',
-            '{"reply": "Ask the ferryman, not me.", "mood": "suspicious", "sentiment_delta": 0, "memory": ""}',
+            "The shadows hunger tonight, Fyra.",  # observed live: same line for a new question
+            "Ask the ferryman, not me.",
         ]
     )
     calls = []
@@ -295,7 +168,7 @@ def test_converse_tier1_accepts_repeat_if_retry_parrots_too(monkeypatch):
              "npc_response": "The shadows hunger tonight, Fyra."}
         ]
     )
-    raw = '{"reply": "The shadows hunger tonight, Fyra.", "mood": "suspicious", "sentiment_delta": 0, "memory": ""}'
+    raw = "The shadows hunger tonight, Fyra."
     calls = []
     monkeypatch.setattr(
         conversation, "_call_llm", lambda **kwargs: calls.append(1) or raw
@@ -308,7 +181,7 @@ def test_converse_tier1_accepts_repeat_if_retry_parrots_too(monkeypatch):
 
 
 def test_converse_tier1_single_call_when_reply_is_genuine(monkeypatch):
-    raw = '{"reply": "Well met.", "mood": "content", "sentiment_delta": 0, "memory": ""}'
+    raw = "Well met."
     calls = []
     monkeypatch.setattr(
         conversation, "_call_llm", lambda **kwargs: calls.append(1) or raw

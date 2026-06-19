@@ -1,10 +1,10 @@
-"""Day 7 — LLM structured-output hardening (schema-constrained card deltas).
+"""LLM schema routing + Tier-1 card enrichment.
 
-Verifies that _call_llm routes a JSON Schema to Ollama's format= (and falls
-back correctly without one), and that converse_tier1 / generate_card_details
-forward their schemas. No real Ollama server: the client / _call_llm boundary is
-faked. parse_card_delta's existing salvage behavior is re-checked here too,
-since the schema only makes malformed output rarer, never impossible.
+Verifies that _call_llm routes a JSON Schema to Ollama's format= (and falls back
+correctly without one), and that the one remaining JSON consumer - the card
+enrichment pass (generate_card_details) - forwards its schema. Conversation turns
+are plain text since Day 8; their output cleanup lives in test_day8_conversation.
+No real Ollama server: the client / _call_llm boundary is faked.
 """
 
 from __future__ import annotations
@@ -65,31 +65,8 @@ def test_call_llm_falls_back_to_json_then_none(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# The schemas themselves + caller forwarding
+# Card enrichment forwards its schema
 # --------------------------------------------------------------------------- #
-def test_card_delta_schema_requires_all_fields_and_enumerates_moods():
-    schema = conversation.CARD_DELTA_SCHEMA
-    assert schema["required"] == ["reply", "mood", "sentiment_delta", "memory"]
-    assert schema["properties"]["reply"]["minLength"] == 1
-    assert set(schema["properties"]["mood"]["enum"]) == conversation.VALID_MOODS
-    assert schema["properties"]["sentiment_delta"]["maximum"] == conversation.SENTIMENT_DELTA_LIMIT
-
-
-def test_converse_tier1_passes_card_delta_schema(monkeypatch):
-    captured = {}
-
-    def fake_call(**kwargs):
-        captured.update(kwargs)
-        return '{"reply": "Aye.", "mood": "content", "sentiment_delta": 0, "memory": ""}'
-
-    # The schema only rides the legacy structured path (Day 8 made plain text the
-    # default); exercise that path explicitly.
-    monkeypatch.setattr(conversation, "LLM_STRUCTURED_OUTPUT", True)
-    monkeypatch.setattr(conversation, "_call_llm", fake_call)
-    conversation.converse_tier1(_tier1_npc(), "Aldric", "Fine blade.")
-    assert captured["schema"] is conversation.CARD_DELTA_SCHEMA
-
-
 def test_generate_card_details_passes_schema(monkeypatch):
     captured = {}
 
@@ -103,17 +80,3 @@ def test_generate_card_details_passes_schema(monkeypatch):
     monkeypatch.setattr(conversation, "_call_llm", fake_call)
     conversation.generate_card_details(_tier1_npc())
     assert set(captured["schema"]["required"]) == set(conversation.CARD_FIELDS)
-
-
-# --------------------------------------------------------------------------- #
-# Salvage net still stands (schema makes these rarer, not impossible)
-# --------------------------------------------------------------------------- #
-def test_parse_card_delta_still_salvages_when_schema_is_bypassed():
-    # If a malformed payload ever slips through (older model, transport quirk),
-    # the existing repair path must still produce a display-safe reply.
-    raw = '{"mood": "content", "sentiment_delta": 0, "memory": "answer hid here"}'
-    delta = conversation.parse_card_delta(raw, "content")
-    assert delta["reply"] == "answer hid here"
-    assert delta["reply_was_genuine"] is False
-    garbage = conversation.parse_card_delta("not json at all", "angry")
-    assert garbage["reply"] and garbage["mood"] == "angry"

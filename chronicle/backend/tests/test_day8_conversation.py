@@ -142,7 +142,6 @@ def test_plain_path_returns_reply_and_computed_delta(monkeypatch):
     assert result["reply"] == "Aye, the forge runs hot today."
     assert result["sentiment_delta"] > 0  # a warm line lifts sentiment
     assert result["mood"] in conversation.VALID_MOODS
-    assert "reply_was_genuine" not in result  # internal flag never leaks
 
 
 def test_plain_path_never_raises_on_non_json_output(monkeypatch):
