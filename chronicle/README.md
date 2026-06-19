@@ -135,7 +135,17 @@ with a `qwen2.5`/`qwen3` model is needed for conversation; without it, NPCs fall
 back to stub replies and everything else still runs. Azure is optional (set the
 `AZURE_OPENAI_*` vars in `chronicle/.env`).
 
-Tests: `cd backend && .venv/Scripts/python.exe -m pytest` (124 passing).
+**Assets.** Sprite PNGs are gitignored. The curated Day-8 set (building/decoration/
+door sprites + the kenney road spritesheet) is reproduced from the asset packs at
+the repo root by `uv run --with pillow python backend/tools/setup_assets.py` — it
+encodes exactly which pack sprite becomes which asset, then crops/trims them. Run
+it once after cloning (or any time the local assets are lost); a freshly generated
+world then looks identical out of the box. The render atlases, the occupation→
+sprite map, and the decoration/road generators all live in code, so they apply to
+any world automatically — only a world's *simulation* state (NPC memories,
+factions, rumors, fog) is lost on regeneration.
+
+Tests: `cd backend && .venv/Scripts/python.exe -m pytest` (135 passing).
 
 ## Project layout
 ```
