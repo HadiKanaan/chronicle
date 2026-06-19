@@ -75,6 +75,9 @@ ACTION_DEFAULT_EFFECTS = {
 }
 
 REPUTATION_EFFECT_LIMIT = 8
+# Drama (0..1) of a Demon Lord deed, for the Witness Memory Tagger (Model 6).
+# Its rumor carries drama_score 85; bystanders need to be perceptive/near to notice.
+DEMON_LORD_DRAMA = 0.85
 ANNOUNCEMENT_MAX_CHARS = 240
 DECISIONS_KEPT = 7
 DECISION_NUM_PREDICT = 300
@@ -384,13 +387,27 @@ def apply_decision(decision: dict[str, Any], day: int) -> dict[str, Any]:
         victim["mood_reason"] = f"after the Demon Lord's {ACTION_PHRASES[action]}"
         behavior.remember(victim, f"Day {day}: {announcement}")
 
-    witnesses = victims + [
+    # The victims bear the blow directly, so they always witness it. Other Tier 1
+    # townsfolk learn of it only if perceptive/near enough to notice (Model 6);
+    # the deed strikes the heart of town, so distance is measured from there.
+    world = database.get_world_state() or {}
+    region = world.get("region", {})
+    diagonal = behavior.region_diagonal(region)
+    town_centre = (
+        float(region.get("width", 64)) / 2.0,
+        float(region.get("height", 64)) / 2.0,
+    )
+    bystanders = [
         npc for npc in npcs
         if int(npc.get("tier", 3)) == 1
         and not npc.get("is_player")
         and not npc.get("is_demon_lord")
         and npc not in victims
-    ][:2]
+    ]
+    extra_witnesses = behavior.select_witnesses(
+        bystanders, town_centre, DEMON_LORD_DRAMA, diagonal, floor=0
+    )[:2]
+    witnesses = victims + extra_witnesses
     rumor = {
         "id": f"rumor_d{day:03d}_demonlord",
         "original_event": announcement,

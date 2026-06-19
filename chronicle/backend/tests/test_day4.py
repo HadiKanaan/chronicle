@@ -161,14 +161,19 @@ def test_storm_writes_memories_and_a_rumor():
     storm_rumors = [r for r in result["rumors"] if r["id"] == "rumor_d003_storm"]
     assert len(storm_rumors) == 1
     assert storm_rumors[0]["known_by_npc_ids"]
-    witnesses = [
+    # Day 8 (Model 6): storm memories are now selective - only the NPCs whose
+    # perception and proximity cross the witness threshold remember it, but the
+    # floor guarantees at least one does (and not every townsperson sleeps through it).
+    eligible = [
         npc for npc in npcs
         if int(npc["tier"]) <= 2 and not npc.get("is_player") and not npc.get("is_demon_lord")
     ]
-    assert all(
-        any("storm broke over Aldenmoor" in entry for entry in npc["memory_buffer"])
-        for npc in witnesses
-    )
+    remembered = [
+        npc for npc in eligible
+        if any("storm broke over Aldenmoor" in entry for entry in npc.get("memory_buffer", []))
+    ]
+    assert remembered, "the witness floor must keep at least one rememberer"
+    assert len(remembered) < len(eligible), "storm witnessing should be selective, not blanket"
 
 
 def test_rumors_persist_without_propagation(temp_db):

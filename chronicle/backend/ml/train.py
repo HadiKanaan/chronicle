@@ -702,3 +702,164 @@ def predict_relationship_delta(
         return _faction_rel_rule(current_norm, seed_norm, alignment, pressure)
     value = float(model.predict(np.array([[current_norm, seed_norm, alignment, pressure]]))[0])
     return max(-FACTION_REL_DELTA_LIMIT, min(FACTION_REL_DELTA_LIMIT, value))
+
+
+# --------------------------------------------------------------------------- #
+# Day 8 — Model 5: Tile Interaction Scorer (hourly, per NPC).
+#
+# Once behavior.classify_behavior has decided WHAT an NPC is doing, this model
+# decides WHERE they go to do it: it scores the candidate destination kinds
+# (home, work, tavern, market, plaza) from the behavior plus the NPC's hour,
+# mood valence, sociability, and occupation, and returns the best one. The
+# hand-rolled mapping that used to live in behavior._behavior_target IS the
+# ground-truth rule, sampled across the feature space (the "noise") to train a
+# small decision tree that the rule then backs as a fallback.
+# --------------------------------------------------------------------------- #
+DESTINATION_KINDS = ["home", "work", "tavern", "market", "plaza"]
+
+
+def _destination_rule(
+    behavior_idx: float,
+    hour: float,
+    valence: float,
+    sociability: float,
+    occ_social: float,
+) -> str:
+    """Pick the destination kind an NPC heads for, given its behavior + state.
+
+    Mirrors the original behavior._behavior_target dispatch, but lets the social
+    pull (innate sociability plus the occupation's leaning) decide between a
+    crowded venue and the open plaza, so the choice is no longer a bare lookup.
+    """
+    behavior = BEHAVIOR_LABELS[int(behavior_idx) % len(BEHAVIOR_LABELS)]
+    social_pull = sociability + occ_social
+    if behavior == "working":
+        return "work"
+    if behavior == "socializing":
+        # Gregarious folk crowd the tavern; the reserved take the open square.
+        return "tavern" if social_pull >= 0.5 else "plaza"
+    if behavior == "seeking_info":
+        # News is traded at the market stalls; quieter seekers drift to the plaza.
+        return "market" if social_pull >= 0.4 else "plaza"
+    if behavior == "traveling":
+        # Out roaming: the lively make for the market, others the public square.
+        return "market" if social_pull >= 0.55 else "plaza"
+    # staying_home, sleeping, fleeing all shelter at home.
+    return "home"
+
+
+def train_tile_interaction_model(seed: int = 31) -> Optional[Any]:
+    """Fit a decision tree mapping (behavior, hour, valence, sociability,
+    occupation) to the best destination kind. Returns None without sklearn."""
+    if not _ML_AVAILABLE:
+        return None
+
+    rng = np.random.RandomState(seed)
+    n = 3000
+    behavior_idx = rng.randint(0, len(BEHAVIOR_LABELS), size=n)
+    hours = rng.randint(0, 24, size=n)
+    valence = rng.rand(n)
+    sociability = rng.rand(n)
+    # Occupation leaning spans roughly the _OCC/_TRAIT sociability range used by
+    # behavior.py, so the tree sees the same inputs production will feed it.
+    occ_social = rng.uniform(-0.2, 0.3, size=n)
+    labels = [
+        _destination_rule(
+            int(behavior_idx[i]), int(hours[i]), valence[i], sociability[i], occ_social[i]
+        )
+        for i in range(n)
+    ]
+    matrix = np.column_stack([behavior_idx, hours / 23.0, valence, sociability, occ_social])
+
+    model = DecisionTreeClassifier(max_depth=8, random_state=seed)
+    model.fit(matrix, labels)
+    return model
+
+
+def predict_destination(
+    tile_model: Optional[Any],
+    behavior: str,
+    hour: int,
+    valence: float,
+    sociability: float,
+    occ_social: float,
+) -> str:
+    """Return the destination kind for an NPC's current behavior + state."""
+    behavior_idx = (
+        BEHAVIOR_LABELS.index(behavior)
+        if behavior in BEHAVIOR_LABELS
+        else BEHAVIOR_LABELS.index("staying_home")
+    )
+    if tile_model is None or not _ML_AVAILABLE:
+        return _destination_rule(behavior_idx, hour, valence, sociability, occ_social)
+    row = np.array([[behavior_idx, hour / 23.0, valence, sociability, occ_social]])
+    kind = str(tile_model.predict(row)[0])
+    if kind in DESTINATION_KINDS:
+        return kind
+    return _destination_rule(behavior_idx, hour, valence, sociability, occ_social)
+
+
+# --------------------------------------------------------------------------- #
+# Day 8 — Model 6: Witness Memory Tagger (per event, per NPC).
+#
+# An NPC's skills.perception rode on every card since Day 2 but never did any
+# work. This threshold model finally spends it: given an NPC's perception, its
+# normalized distance to an event, and the event's drama, it decides whether
+# that NPC actually witnessed and would remember it. Event memories and rumor
+# seeding become selective (a sharp-eyed neighbour notices, the oblivious miss
+# it) instead of a blanket fixed slice. The rule is a simple weighted threshold;
+# the tree learns the same boundary and the rule backs it as a fallback.
+# --------------------------------------------------------------------------- #
+# Weights on (perception, proximity, drama); the bias sets where the cut falls.
+_WITNESS_PERCEPTION_WEIGHT = 0.45
+_WITNESS_PROXIMITY_WEIGHT = 0.40
+_WITNESS_DRAMA_WEIGHT = 0.30
+_WITNESS_BIAS = -0.60
+
+
+def _witness_rule(perception: float, distance: float, drama: float) -> bool:
+    """True when an NPC perceptive enough, close enough, and a dramatic enough
+    event combine to cross the witnessing threshold."""
+    perception = max(0.0, min(1.0, perception))
+    distance = max(0.0, min(1.0, distance))
+    drama = max(0.0, min(1.0, drama))
+    proximity = 1.0 - distance
+    score = (
+        _WITNESS_PERCEPTION_WEIGHT * perception
+        + _WITNESS_PROXIMITY_WEIGHT * proximity
+        + _WITNESS_DRAMA_WEIGHT * drama
+        + _WITNESS_BIAS
+    )
+    return score >= 0.0
+
+
+def train_witness_model(seed: int = 37) -> Optional[Any]:
+    """Fit a decision tree over synthetic (perception, distance, drama) samples
+    labelled by the witnessing threshold. Returns None without sklearn."""
+    if not _ML_AVAILABLE:
+        return None
+
+    rng = np.random.RandomState(seed)
+    features = rng.rand(3000, 3)
+    labels = [
+        1 if _witness_rule(features[i, 0], features[i, 1], features[i, 2]) else 0
+        for i in range(features.shape[0])
+    ]
+    model = DecisionTreeClassifier(max_depth=6, random_state=seed)
+    model.fit(features, labels)
+    return model
+
+
+def predict_witnessed(
+    witness_model: Optional[Any],
+    perception: float,
+    distance: float,
+    drama: float,
+) -> bool:
+    """Decide whether one NPC witnesses (and so remembers) a nearby event."""
+    perception = max(0.0, min(1.0, perception))
+    distance = max(0.0, min(1.0, distance))
+    drama = max(0.0, min(1.0, drama))
+    if witness_model is None or not _ML_AVAILABLE:
+        return _witness_rule(perception, distance, drama)
+    return bool(witness_model.predict(np.array([[perception, distance, drama]]))[0])

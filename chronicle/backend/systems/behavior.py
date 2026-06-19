@@ -15,6 +15,7 @@ single source of truth and nothing here touches rendering.
 
 from __future__ import annotations
 
+import math
 import random
 import re
 from collections import deque
@@ -66,17 +67,37 @@ _RESTLESS_OCCUPATIONS = {"courier": 0.85, "wanderer": 0.85, "trader": 0.70, "chi
 
 _behavior_model: Optional[Any] = None
 _mood_model: Optional[Any] = None
+_tile_model: Optional[Any] = None
 _models_trained = False
 
+# Day 8 (Model 6): the Witness Memory Tagger trains lazily and separately so
+# the event-seeding paths (here and in demon_lord) can share one instance.
+_witness_model: Optional[Any] = None
+_witness_trained = False
 
-def _get_models() -> tuple[Optional[Any], Optional[Any]]:
-    """Train the behavior and mood models once per process."""
-    global _behavior_model, _mood_model, _models_trained
+# Drama (0..1) of the standing event kinds, for the witness tagger.
+STORM_DRAMA = 0.70
+MOOD_RUMOR_DRAMA = 0.55
+
+
+def _get_models() -> tuple[Optional[Any], Optional[Any], Optional[Any]]:
+    """Train the behavior, mood, and tile-interaction models once per process."""
+    global _behavior_model, _mood_model, _tile_model, _models_trained
     if not _models_trained:
         _behavior_model = ml.train_behavior_model()
         _mood_model = ml.train_mood_model()
+        _tile_model = ml.train_tile_interaction_model()
         _models_trained = True
-    return _behavior_model, _mood_model
+    return _behavior_model, _mood_model, _tile_model
+
+
+def _get_witness_model() -> Optional[Any]:
+    """Train the Witness Memory Tagger once per process (Model 6)."""
+    global _witness_model, _witness_trained
+    if not _witness_trained:
+        _witness_model = ml.train_witness_model()
+        _witness_trained = True
+    return _witness_model
 
 
 def _clamp(value: float) -> float:
@@ -122,6 +143,9 @@ def _npc_features(npc: dict[str, Any], weather: str, rng: random.Random) -> dict
         "fear": jitter(fear),
         "restlessness": jitter(restlessness),
         "curiosity": jitter(curiosity),
+        # Occupation's social leaning, fed to the Tile Interaction Scorer so the
+        # destination choice knows a tavern-keeper gravitates to the crowd.
+        "occ_social": _OCC_SOCIABILITY.get(occupation, 0.0),
     }
 
 
@@ -140,27 +164,46 @@ def building_centres(region: dict[str, Any]) -> dict[str, tuple[int, int]]:
     return centres
 
 
+def _plaza_centre(centres: dict[str, tuple[int, int]]) -> Optional[tuple[int, int]]:
+    """The town's public square: the civic hall, else the chapel, else market."""
+    return centres.get("magistrate_hall") or centres.get("church") or centres.get("market")
+
+
 def _behavior_target(
     npc: dict[str, Any],
     behavior: str,
+    hour: int,
     centres: dict[str, tuple[int, int]],
-    rng: random.Random,
+    features: dict[str, float],
+    tile_model: Optional[Any],
 ) -> Optional[tuple[int, int]]:
+    """Choose the target tile for an NPC's behavior via the Tile Interaction
+    Scorer (Model 5), then resolve the chosen kind to a concrete centre.
+
+    The model only picks the destination KIND; movement and pathing are
+    unchanged. Unlike the old random roam, the choice is deterministic given
+    the NPC's state, so travelers no longer re-path to a different landmark
+    every hour (no thrashing).
+    """
     home = (int(npc.get("home_x", 0)), int(npc.get("home_y", 0)))
     work = (int(npc.get("work_x", 0)), int(npc.get("work_y", 0)))
-    tavern = centres.get("tavern")
-    market = centres.get("market")
-    if behavior == "working":
+    kind = ml.predict_destination(
+        tile_model,
+        behavior,
+        hour,
+        features["valence"],
+        features["sociability"],
+        features.get("occ_social", 0.0),
+    )
+    if kind == "work":
         return work
-    if behavior == "socializing":
-        return tavern or market or home
-    if behavior == "seeking_info":
-        return market or tavern or home
-    if behavior == "traveling":
-        # Wander between landmarks; re-rolls each hour, which reads as roaming.
-        options = [c for c in (tavern, market, work) if c is not None]
-        return rng.choice(options) if options else home
-    # staying_home, sleeping, fleeing all shelter at home.
+    if kind == "tavern":
+        return centres.get("tavern") or centres.get("market") or home
+    if kind == "market":
+        return centres.get("market") or centres.get("tavern") or home
+    if kind == "plaza":
+        return _plaza_centre(centres) or home
+    # "home" (staying_home, sleeping, fleeing) and any unknown kind shelter home.
     return home
 
 
@@ -228,7 +271,7 @@ def update_hourly(
     the NPC dicts in place and returns {"changed": [npc, ...],
     "behavior_counts": {...}} so the caller can persist only what changed.
     """
-    behavior_model, _ = _get_models()
+    behavior_model, _, tile_model = _get_models()
     region = state["region"]
     tiles = region["tiles"]
     weather = region.get("current_weather", "clear")
@@ -261,7 +304,7 @@ def update_hourly(
             npc["current_behavior"] = behavior
             npc_changed = True
 
-        target = _behavior_target(npc, behavior, centres, rng)
+        target = _behavior_target(npc, behavior, hour, centres, features, tile_model)
         new_path: list[list[int]] = []
         if target is not None:
             start = (int(round(npc.get("x", 0))), int(round(npc.get("y", 0))))
@@ -298,6 +341,73 @@ def update_movement(npcs: list[dict[str, Any]]) -> list[dict[str, Any]]:
         npc["x"], npc["y"] = float(taken[-1][0]), float(taken[-1][1])
         changed.append(npc)
     return changed
+
+
+# --------------------------------------------------------------------------- #
+# Witness Memory Tagger (Day 8 / Model 6)
+# --------------------------------------------------------------------------- #
+def perception_norm(npc: dict[str, Any]) -> float:
+    """The NPC's perception skill on a 0..1 scale (cards store it 0..100)."""
+    skills = npc.get("skills")
+    if isinstance(skills, dict):
+        raw = skills.get("perception", 10)
+    else:
+        raw = getattr(skills, "perception", 10)
+    try:
+        return max(0.0, min(1.0, float(raw) / 100.0))
+    except (TypeError, ValueError):
+        return 0.10
+
+
+def region_diagonal(region: dict[str, Any]) -> float:
+    """Map diagonal in tiles, used to normalize event distances to 0..1."""
+    tiles = region.get("tiles") or []
+    width = int(region.get("width") or (len(tiles[0]) if tiles else 64))
+    height = int(region.get("height") or (len(tiles) or 64))
+    return math.hypot(width, height) or 1.0
+
+
+def _npc_position(npc: dict[str, Any]) -> tuple[float, float]:
+    return (
+        float(npc.get("x", npc.get("home_x", 0)) or 0.0),
+        float(npc.get("y", npc.get("home_y", 0)) or 0.0),
+    )
+
+
+def select_witnesses(
+    candidates: list[dict[str, Any]],
+    event_xy: tuple[float, float],
+    drama: float,
+    diagonal: float,
+    *,
+    floor: int = 1,
+) -> list[dict[str, Any]]:
+    """Return which candidate NPCs witness (and so remember) an event.
+
+    Each NPC's chance to register the event rises with their perception, the
+    drama, and their proximity to event_xy (Model 6). A floor guarantees at
+    least `floor` witnesses - the most perceptive and nearest - so no event
+    ever vanishes entirely unseen.
+    """
+    model = _get_witness_model()
+    ex, ey = event_xy
+    selected: list[dict[str, Any]] = []
+    scored: list[tuple[dict[str, Any], float]] = []
+    for npc in candidates:
+        perception = perception_norm(npc)
+        nx, ny = _npc_position(npc)
+        distance = min(1.0, math.hypot(nx - ex, ny - ey) / diagonal)
+        scored.append((npc, perception - distance))
+        if ml.predict_witnessed(model, perception, distance, drama):
+            selected.append(npc)
+    if len(selected) < floor and scored:
+        # Backfill from the most perceptive, closest candidates to honour the floor.
+        for npc, _ in sorted(scored, key=lambda item: item[1], reverse=True):
+            if npc not in selected:
+                selected.append(npc)
+            if len(selected) >= floor:
+                break
+    return selected
 
 
 # --------------------------------------------------------------------------- #
@@ -354,12 +464,20 @@ def update_daily(
     "mood_changes": int} — the caller persists both. No propagation: each rumor
     starts known only by its witnesses.
     """
-    _, mood_model = _get_models()
+    _, mood_model, _ = _get_models()
     region = state["region"]
     weather = region.get("current_weather", "clear")
     severity = WEATHER_SEVERITY.get(weather, 0.0)
     day = int(state.get("current_day", 1))
+    diagonal = region_diagonal(region)
+    # Town events radiate from the centre of the map; distance to it gates who
+    # actually witnesses them (Model 6).
+    town_centre = (
+        float(region.get("width", 64)) / 2.0,
+        float(region.get("height", 64)) / 2.0,
+    )
 
+    npcs_by_id = {npc["id"]: npc for npc in npcs}
     changed: list[dict[str, Any]] = []
     changed_ids: set[str] = set()
     rumors: list[dict[str, Any]] = []
@@ -371,11 +489,22 @@ def update_daily(
             changed.append(npc)
 
     if weather_changed and weather == "storm":
-        for npc in npcs:
-            if int(npc.get("tier", 3)) <= 2 and _is_simulated(npc):
-                remember(npc, f"Day {day}: a storm broke over Aldenmoor.")
-                _mark_changed(npc)
-        witnesses = [n["id"] for n in npcs if int(n.get("tier", 3)) == 1][:4]
+        # Only NPCs who actually witness the storm (perception + proximity) carry
+        # the memory - the oblivious and the far-flung sleep through it.
+        storm_pool = [
+            npc for npc in npcs if int(npc.get("tier", 3)) <= 2 and _is_simulated(npc)
+        ]
+        for npc in select_witnesses(storm_pool, town_centre, STORM_DRAMA, diagonal, floor=1):
+            remember(npc, f"Day {day}: a storm broke over Aldenmoor.")
+            _mark_changed(npc)
+        # The rumor is seeded on the Tier 1 witnesses (its eventual tellers).
+        tier1_pool = [n for n in storm_pool if int(n.get("tier", 3)) == 1]
+        tier1_witnesses = (
+            select_witnesses(tier1_pool, town_centre, STORM_DRAMA, diagonal, floor=1)
+            if tier1_pool
+            else []
+        )
+        witnesses = [n["id"] for n in tier1_witnesses][:4]
         rumors.append(
             {
                 "id": f"rumor_d{day:03d}_storm",
@@ -422,7 +551,17 @@ def update_daily(
                 and rng.random() < 0.5
             ):
                 text = f"{npc['name']} has been {new_mood} since {event_desc} on day {day}."
-                relations = [r["npc_id"] for r in npc.get("relationships", [])][:2]
+                # The NPC always knows their own state; relations learn it only
+                # if they're perceptive/near enough to notice the change (Model 6).
+                rel_npcs = [
+                    npcs_by_id[r["npc_id"]]
+                    for r in npc.get("relationships", [])[:2]
+                    if r.get("npc_id") in npcs_by_id
+                ]
+                rel_witnesses = select_witnesses(
+                    rel_npcs, _npc_position(npc), MOOD_RUMOR_DRAMA, diagonal, floor=0
+                )
+                relations = [n["id"] for n in rel_witnesses]
                 rumors.append(
                     {
                         "id": f"rumor_d{day:03d}_{npc['id']}",
