@@ -181,18 +181,44 @@ def test_prewarm_npc_warms_the_static_prefix_cheaply(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(conversation, "_call_llm", fake_call)
-    assert conversation.prewarm_npc(_tier1_npc(name="Mara Vane", occupation="blacksmith")) is True
+    npc = _tier1_npc(name="Mara Vane", occupation="blacksmith",
+                     memory_buffer=["Day 2: a flood took the low road."])
+    assert conversation.prewarm_npc(npc, "Aldric", ["a market rumor"]) is True
     # Warming wants only the prefill: plain call, no schema, a single token out.
     assert captured["json_format"] is False
     assert captured["schema"] is None
     assert captured["num_predict"] <= 8
-    # It carries the exact static system prompt converse_tier1 will reuse.
+    # It carries the exact static system prompt converse_tier1 will reuse...
     assert "Mara Vane" in captured["system"] and "blacksmith" in captured["system"]
+    # ...the stable situation prefix (mood/disposition/rumors)...
+    assert "Current mood" in captured["user"] and "a market rumor" in captured["user"]
+    # ...but NOT the memories (those vary with the player's query, so they sit in
+    # the re-evaluated tail, not the warmed prefix).
+    assert "Things you remember" not in captured["user"]
+
+
+def test_prewarm_block_is_a_true_prefix_of_the_real_turn(monkeypatch):
+    # The whole optimization rests on this: the warmed user block must be a
+    # byte-exact prefix of converse_tier1's user message, or Ollama re-evaluates
+    # everything and the warm buys nothing.
+    npc = _tier1_npc(
+        memory_buffer=["Day 1: the flood drowned my brother", "Day 3: a storm broke"],
+        conversation_history=[],
+    )
+    calls = []
+    monkeypatch.setattr(conversation, "_call_llm", lambda **kw: calls.append(kw) or "Aye.")
+    conversation.prewarm_npc(npc, "Aldric", ["a market rumor"])
+    conversation.converse_tier1(npc, "Aldric", "tell me about the flood", ["a market rumor"])
+
+    warm_user, turn_user = calls[0]["user"], calls[1]["user"]
+    assert turn_user.startswith(warm_user), "warm block must be a prefix of the real turn"
+    assert "tell me about the flood" in turn_user  # the varying tail is the new part
+    assert calls[0]["system"] == calls[1]["system"]  # identical cached system prompt
 
 
 def test_prewarm_npc_reports_false_when_llm_down(monkeypatch):
     monkeypatch.setattr(conversation, "_call_llm", lambda **kwargs: None)
-    assert conversation.prewarm_npc(_tier1_npc()) is False
+    assert conversation.prewarm_npc(_tier1_npc(), "Aldric") is False
 
 
 def _seed_npc(database, npc):
@@ -212,7 +238,7 @@ def test_dialogue_open_with_npc_id_prewarms_tier1(temp_db, monkeypatch):
     fired = threading.Event()
     seen = {}
 
-    def fake_prewarm(npc):
+    def fake_prewarm(npc, *args, **kwargs):
         seen["id"] = npc["id"]
         fired.set()
         return True
@@ -230,7 +256,7 @@ def test_dialogue_open_skips_prewarm_for_tier2(temp_db, monkeypatch):
 
     _seed_npc(temp_db, _tier1_npc(id="npc_t2", tier=2))
     fired = threading.Event()
-    monkeypatch.setattr(main.conversation, "prewarm_npc", lambda npc: fired.set() or True)
+    monkeypatch.setattr(main.conversation, "prewarm_npc", lambda npc, *a, **k: fired.set() or True)
     main.post_input(main.PlayerInput(type="dialogue_open", payload={"npc_id": "npc_t2"}))
     assert not fired.wait(0.5), "tier 2 NPCs use stubs - no LLM prewarm"
 
@@ -241,7 +267,7 @@ def test_dialogue_open_without_npc_id_does_not_prewarm(temp_db, monkeypatch):
     import main
 
     fired = threading.Event()
-    monkeypatch.setattr(main.conversation, "prewarm_npc", lambda npc: fired.set() or True)
+    monkeypatch.setattr(main.conversation, "prewarm_npc", lambda npc, *a, **k: fired.set() or True)
     # The freeze heartbeat re-sends dialogue_open with an empty payload.
     main.post_input(main.PlayerInput(type="dialogue_open", payload={}))
     assert not fired.wait(0.3), "a heartbeat (no npc_id) must not re-warm"

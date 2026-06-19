@@ -581,8 +581,9 @@ def build_situation_block(
     player_name: str,
     rumor_texts: Optional[list[str]] = None,
     recalled_memories: Optional[list[str]] = None,
+    include_memories: bool = True,
 ) -> str:
-    """The volatile half of the prompt: mood, disposition, memories, rumors.
+    """The volatile half of the prompt: mood, disposition, rumors, memories.
 
     Rides inside the final user message, AFTER the cached system prompt and
     history, so a mood shift or a fresh memory never invalidates the prefix
@@ -593,6 +594,14 @@ def build_situation_block(
     memories are injected instead of the recency default - so the NPC pulls up
     the memory that matters to what the player said, not just the latest. The
     default (None -> most recent 3) keeps existing callers/tests unchanged.
+
+    ORDER matters for prefix warming (Day 8 speedup): the memories section is
+    appended LAST and gated by ``include_memories``. Everything before it
+    (mood/disposition/rumors) is stable while a dialogue window is open and
+    frozen, so prewarm_npc can pre-evaluate it (include_memories=False) as a true
+    prefix of the real turn's user message - the only varying tails are the
+    query-relevant memories and the player's line, which Ollama re-evaluates
+    cheaply on top of the warmed prefix.
     """
     mood = npc.get("current_mood", "neutral")
     mood_reason = npc.get("mood_reason", "")
@@ -603,20 +612,21 @@ def build_situation_block(
         f"You feel {sentiment_phrase(sentiment)} toward {player_name} "
         f"(sentiment {sentiment}/100).",
     ]
-    # Inject the relevance-retrieved memories when the caller supplies them;
-    # otherwise the recency default. Either way it stays a small handful - a
-    # long memory list buries the actual question lower in the prompt, where a
-    # small model under-attends to it.
-    if recalled_memories is not None:
-        memories = recalled_memories
-    else:
-        memories = npc.get("memory_buffer", [])[-3:]
-    if memories:
-        lines.append("Things you remember:")
-        lines.extend(f"- {memory}" for memory in memories)
     if rumor_texts:
         lines.append("Rumors you have heard around town (you may bring them up):")
         lines.extend(f"- {text}" for text in rumor_texts)
+    # Memories LAST so the block above stays a warm-able stable prefix. Inject the
+    # relevance-retrieved memories when the caller supplies them; otherwise the
+    # recency default. Either way a small handful - a long list buries the actual
+    # question lower in the prompt, where a small model under-attends to it.
+    if include_memories:
+        if recalled_memories is not None:
+            memories = recalled_memories
+        else:
+            memories = npc.get("memory_buffer", [])[-3:]
+        if memories:
+            lines.append("Things you remember:")
+            lines.extend(f"- {memory}" for memory in memories)
     return "\n".join(lines)
 
 
@@ -676,25 +686,41 @@ def converse_tier1(
     return _converse_tier1_plain(npc, player_name, player_text, rumor_texts)
 
 
-def prewarm_npc(npc: dict[str, Any]) -> bool:
-    """Pre-evaluate an NPC's prompt prefix so the first real turn is warm.
+def _warm_user_block(
+    npc: dict[str, Any],
+    player_name: str,
+    rumor_texts: Optional[list[str]] = None,
+) -> str:
+    """The exact stable prefix of converse_tier1's user message (no memories,
+    no player line) - what prewarm_npc warms and the real turn extends."""
+    return build_situation_block(npc, player_name, rumor_texts, include_memories=False)
+
+
+def prewarm_npc(
+    npc: dict[str, Any],
+    player_name: str = "a traveler",
+    rumor_texts: Optional[list[str]] = None,
+) -> bool:
+    """Pre-evaluate an NPC's prompt PREFIX so the first real turn is warm.
 
     Called when the player OPENS an NPC's dialogue window, before they have
-    typed anything. It issues a tiny (num_predict=1) chat call carrying the
-    exact static system prompt + replayed history that converse_tier1 will use,
-    so Ollama's single-slot prefix cache holds that prefix. The first turn then
-    skips re-evaluating it - on this CPU that shifts ~5s of prompt-eval out of
-    the player's post-send wait and into their reading/typing time. The one
-    generated token is discarded. Returns True if the call reached the model.
+    typed anything. It issues a tiny (num_predict=1) chat call carrying the exact
+    system prompt + replayed history + STABLE situation prefix (mood/disposition/
+    rumors, no memories, no player line) that converse_tier1 will reuse. Ollama's
+    single-slot cache then holds that prefix, and the real turn re-evaluates only
+    the short varying tail (the query-relevant memories + the player's line) on
+    top of it - measured ~3.4s of prompt-eval shifted off the player's wait.
 
-    Only the system prompt and history are warmed (the volatile situation block
-    rides the user message and is not known until the player speaks). Serializes
-    on the same _llm_lock as every other call, so if the player sends mid-warm
-    their turn simply queues behind the prefill it was going to reuse anyway.
+    The win depends on the warmed user block being a true STRING PREFIX of the
+    real turn's user message; build_situation_block(include_memories=False) and
+    converse_tier1 share _warm_user_block to guarantee that. The world is frozen
+    while a dialogue window is open, so mood/disposition/rumors do not drift
+    between the warm and the send. Serializes on the same _llm_lock as every
+    other call. Returns True if the call reached the model.
     """
     raw = _call_llm(
         system=build_character_prompt(npc),
-        user="(warming up)",
+        user=_warm_user_block(npc, player_name, rumor_texts),
         json_format=False,
         num_predict=1,
         temperature=0.0,

@@ -298,7 +298,13 @@ def _prewarm_conversation(npc_id: str) -> None:
         try:
             npc = get_npc(npc_id)
             if npc and int(npc.get("tier", 3)) == 1 and not npc.get("is_player"):
-                conversation.prewarm_npc(npc)
+                # Match the exact prefix converse_tier1 will build: same player
+                # name and the same resolved rumor texts ride the stable block.
+                state = get_world_state()
+                player = get_npc(state.get("player_npc_id") or "") if state else None
+                player_name = player.get("name", "a traveler") if player else "a traveler"
+                rumor_texts = rumors.known_rumor_texts(npc, get_active_rumors())
+                conversation.prewarm_npc(npc, player_name, rumor_texts)
         finally:
             with _prewarm_lock:
                 if _prewarming_npc_id == npc_id:
