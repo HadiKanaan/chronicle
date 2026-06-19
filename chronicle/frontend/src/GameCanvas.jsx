@@ -401,6 +401,14 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
         const phase = Math.sin(now / 900 + tx * 0.6 + ty * 0.9);
         ctx.fillStyle = `rgba(120, 196, 226, ${0.10 + 0.12 * (0.5 + 0.5 * phase)})`;
         ctx.fillRect(screenX, screenY, DISPLAY_TILE, DISPLAY_TILE);
+        // Bank shading: a darker waterline on edges that meet land, so the
+        // river reads with depth instead of a hard square cut.
+        const b = Math.max(2, Math.round(DISPLAY_TILE * 0.12));
+        ctx.fillStyle = 'rgba(18, 52, 84, 0.42)';
+        if (tileMap.get(`${tx},${ty - 1}`) !== 'water') ctx.fillRect(screenX, screenY, DISPLAY_TILE, b);
+        if (tileMap.get(`${tx},${ty + 1}`) !== 'water') ctx.fillRect(screenX, screenY + DISPLAY_TILE - b, DISPLAY_TILE, b);
+        if (tileMap.get(`${tx - 1},${ty}`) !== 'water') ctx.fillRect(screenX, screenY, b, DISPLAY_TILE);
+        if (tileMap.get(`${tx + 1},${ty}`) !== 'water') ctx.fillRect(screenX + DISPLAY_TILE - b, screenY, b, DISPLAY_TILE);
       }
     }
   }

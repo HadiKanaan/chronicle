@@ -137,6 +137,11 @@ def main() -> None:
     shutil.copyfile(os.path.join(FANTASY_ART, "Ground Tileset", "Tileset_Road.png"), road_dst)
     print(f"  {'road_tiles.png':22s} <- Tileset_Road.png")
 
+    print("water tileset (Pixel Crawler, river body cell):")
+    water_dst = os.path.join(ASSETS, "tiles", "water_pc.png")
+    shutil.copyfile(os.path.join(PC, "..", "Environment", "Tilesets", "Water_tiles.png"), water_dst)
+    print(f"  {'water_pc.png':22s} <- Water_tiles.png")
+
     print("characters (6-frame walk/run sheets, copied raw):")
     for name, src in CHARACTERS.items():
         dst = os.path.join(ASSETS, "characters", name)
