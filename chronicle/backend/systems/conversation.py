@@ -676,6 +676,34 @@ def converse_tier1(
     return _converse_tier1_plain(npc, player_name, player_text, rumor_texts)
 
 
+def prewarm_npc(npc: dict[str, Any]) -> bool:
+    """Pre-evaluate an NPC's prompt prefix so the first real turn is warm.
+
+    Called when the player OPENS an NPC's dialogue window, before they have
+    typed anything. It issues a tiny (num_predict=1) chat call carrying the
+    exact static system prompt + replayed history that converse_tier1 will use,
+    so Ollama's single-slot prefix cache holds that prefix. The first turn then
+    skips re-evaluating it - on this CPU that shifts ~5s of prompt-eval out of
+    the player's post-send wait and into their reading/typing time. The one
+    generated token is discarded. Returns True if the call reached the model.
+
+    Only the system prompt and history are warmed (the volatile situation block
+    rides the user message and is not known until the player speaks). Serializes
+    on the same _llm_lock as every other call, so if the player sends mid-warm
+    their turn simply queues behind the prefill it was going to reuse anyway.
+    """
+    raw = _call_llm(
+        system=build_character_prompt(npc),
+        user="(warming up)",
+        json_format=False,
+        num_predict=1,
+        temperature=0.0,
+        history=_history_messages(npc),
+        schema=None,
+    )
+    return raw is not None
+
+
 def _converse_tier1_plain(
     npc: dict[str, Any],
     player_name: str,

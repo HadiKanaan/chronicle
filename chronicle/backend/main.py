@@ -273,6 +273,40 @@ def _clear_dialogue_freeze() -> None:
     _dialogue_freeze_until = 0.0
 
 
+# Prefix warming: when the player opens an NPC's dialogue window we pre-evaluate
+# that NPC's prompt prefix in the background, so the first turn's prompt-eval is
+# already in Ollama's cache and the player waits only for generation. Tracks the
+# NPC currently being warmed so rapid re-opens / heartbeats don't pile up calls.
+_prewarming_npc_id: Optional[str] = None
+_prewarm_lock = threading.Lock()
+
+
+def _prewarm_conversation(npc_id: str) -> None:
+    """Fire-and-forget warm of a Tier 1 NPC's LLM prefix on dialogue open.
+
+    Runs on a daemon thread so the /api/input request returns immediately; the
+    warm call itself serializes on conversation's single-call queue. Tier 2/3
+    NPCs use rule-based stubs (no LLM), so they are skipped."""
+    global _prewarming_npc_id
+    with _prewarm_lock:
+        if _prewarming_npc_id == npc_id:
+            return  # a warm for this NPC is already in flight
+        _prewarming_npc_id = npc_id
+
+    def _run() -> None:
+        global _prewarming_npc_id
+        try:
+            npc = get_npc(npc_id)
+            if npc and int(npc.get("tier", 3)) == 1 and not npc.get("is_player"):
+                conversation.prewarm_npc(npc)
+        finally:
+            with _prewarm_lock:
+                if _prewarming_npc_id == npc_id:
+                    _prewarming_npc_id = None
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
 def _conversation_started() -> None:
     global _active_conversations
     with _conversation_flight_lock:
@@ -871,6 +905,12 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
     # Dialogue window signals drive the world freeze; not log-worthy events.
     if player_input.type == "dialogue_open":
         _extend_dialogue_freeze()
+        # Warm this NPC's LLM prefix now (while the player reads/types) so the
+        # first turn skips the cold prompt-eval. npc_id is optional: the freeze
+        # heartbeat re-sends dialogue_open without it and must not re-warm.
+        npc_id = str(player_input.payload.get("npc_id", "")).strip()
+        if npc_id:
+            _prewarm_conversation(npc_id)
         return JSONResponse({"status": "ok", "accepted": True})
     if player_input.type == "dialogue_close":
         _clear_dialogue_freeze()

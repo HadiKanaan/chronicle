@@ -129,9 +129,12 @@ export default function App() {
   }, [showContinent, showPauseMenu]);
 
   const openDialogue = async (npc) => {
-    // Tell the backend the dialogue window is open: the world clock freezes
-    // so the NPC's mood and the town stay consistent mid-conversation.
-    sendInput({ type: 'dialogue_open', payload: {} }).catch(() => {});
+    // Tell the backend the dialogue window is open: the world clock freezes so
+    // the NPC's mood and the town stay consistent mid-conversation. Sending the
+    // npc_id also warms that NPC's LLM prefix now, while the player reads/types,
+    // so the first reply skips the cold prompt-eval. (The freeze heartbeat below
+    // re-sends dialogue_open WITHOUT an id, so it never re-warms.)
+    sendInput({ type: 'dialogue_open', payload: { npc_id: npc.id } }).catch(() => {});
     setDialogue({
       npcId: npc.id,
       npcName: npc.name,

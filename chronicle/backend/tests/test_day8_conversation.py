@@ -167,3 +167,81 @@ def test_plain_path_falls_back_to_stub_when_llm_down(monkeypatch):
     assert result["reply"]
     assert result["mood"] == "content"  # stub never shifts mood
     assert result["sentiment_delta"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# Prefix warming on dialogue open (latency: pay prompt-eval before the player
+# sends, while they read/type, so the first turn only waits for generation)
+# --------------------------------------------------------------------------- #
+def test_prewarm_npc_warms_the_static_prefix_cheaply(monkeypatch):
+    captured = {}
+
+    def fake_call(**kwargs):
+        captured.update(kwargs)
+        return "ok"
+
+    monkeypatch.setattr(conversation, "_call_llm", fake_call)
+    assert conversation.prewarm_npc(_tier1_npc(name="Mara Vane", occupation="blacksmith")) is True
+    # Warming wants only the prefill: plain call, no schema, a single token out.
+    assert captured["json_format"] is False
+    assert captured["schema"] is None
+    assert captured["num_predict"] <= 8
+    # It carries the exact static system prompt converse_tier1 will reuse.
+    assert "Mara Vane" in captured["system"] and "blacksmith" in captured["system"]
+
+
+def test_prewarm_npc_reports_false_when_llm_down(monkeypatch):
+    monkeypatch.setattr(conversation, "_call_llm", lambda **kwargs: None)
+    assert conversation.prewarm_npc(_tier1_npc()) is False
+
+
+def _seed_npc(database, npc):
+    database.save_npc(npc)
+    database.save_world_state(
+        {"game_started": True, "current_day": 1, "current_hour": 6,
+         "player_npc_id": None, "region": {"id": "r", "width": 4, "height": 4}}
+    )
+
+
+def test_dialogue_open_with_npc_id_prewarms_tier1(temp_db, monkeypatch):
+    import threading
+
+    import main
+
+    _seed_npc(temp_db, _tier1_npc(id="npc_warm"))
+    fired = threading.Event()
+    seen = {}
+
+    def fake_prewarm(npc):
+        seen["id"] = npc["id"]
+        fired.set()
+        return True
+
+    monkeypatch.setattr(main.conversation, "prewarm_npc", fake_prewarm)
+    main.post_input(main.PlayerInput(type="dialogue_open", payload={"npc_id": "npc_warm"}))
+    assert fired.wait(2.0), "tier 1 dialogue open should warm the LLM prefix"
+    assert seen["id"] == "npc_warm"
+
+
+def test_dialogue_open_skips_prewarm_for_tier2(temp_db, monkeypatch):
+    import threading
+
+    import main
+
+    _seed_npc(temp_db, _tier1_npc(id="npc_t2", tier=2))
+    fired = threading.Event()
+    monkeypatch.setattr(main.conversation, "prewarm_npc", lambda npc: fired.set() or True)
+    main.post_input(main.PlayerInput(type="dialogue_open", payload={"npc_id": "npc_t2"}))
+    assert not fired.wait(0.5), "tier 2 NPCs use stubs - no LLM prewarm"
+
+
+def test_dialogue_open_without_npc_id_does_not_prewarm(temp_db, monkeypatch):
+    import threading
+
+    import main
+
+    fired = threading.Event()
+    monkeypatch.setattr(main.conversation, "prewarm_npc", lambda npc: fired.set() or True)
+    # The freeze heartbeat re-sends dialogue_open with an empty payload.
+    main.post_input(main.PlayerInput(type="dialogue_open", payload={}))
+    assert not fired.wait(0.3), "a heartbeat (no npc_id) must not re-warm"
