@@ -24,7 +24,11 @@ from ml import train as ml
 
 
 # Rolling memory: keep only the most recent significant events per NPC.
-MEMORY_BUFFER_CAP = 10
+# Day 8 (RAG): the store holds a deep life now - conversations inject only the
+# few memories RELEVANT to what the player just said (systems/recall.py), not
+# the most recent, so a large buffer no longer bloats the prompt. The day-stamp
+# dedup below still keeps repeats from filling it.
+MEMORY_BUFFER_CAP = 50
 
 # Tiles walked per movement sub-tick. The clock pops cached path steps once per
 # real second; at 5 real seconds per game hour that is 5 tiles/hour walking and

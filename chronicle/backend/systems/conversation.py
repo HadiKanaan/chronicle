@@ -35,6 +35,7 @@ from typing import Any, Optional
 
 from ml import train as ml
 from models.npc import MoodType
+from systems import recall
 
 try:  # pragma: no cover - exercised by environment, not unit tests
     import ollama
@@ -539,6 +540,7 @@ def build_situation_block(
     npc: dict[str, Any],
     player_name: str,
     rumor_texts: Optional[list[str]] = None,
+    recalled_memories: Optional[list[str]] = None,
 ) -> str:
     """The volatile half of the prompt: mood, disposition, memories, rumors.
 
@@ -546,6 +548,11 @@ def build_situation_block(
     history, so a mood shift or a fresh memory never invalidates the prefix
     cache. rumor_texts are the actual texts of rumors the NPC knows, resolved
     by the caller - this module never touches the database (Day 6 / US4).
+
+    Day 8 (RAG): when ``recalled_memories`` is given, those relevance-retrieved
+    memories are injected instead of the recency default - so the NPC pulls up
+    the memory that matters to what the player said, not just the latest. The
+    default (None -> most recent 3) keeps existing callers/tests unchanged.
     """
     mood = npc.get("current_mood", "neutral")
     mood_reason = npc.get("mood_reason", "")
@@ -556,9 +563,14 @@ def build_situation_block(
         f"You feel {sentiment_phrase(sentiment)} toward {player_name} "
         f"(sentiment {sentiment}/100).",
     ]
-    # Keep only the most recent few: a long memory list buries the actual
-    # question lower in the prompt, where a small model under-attends to it.
-    memories = npc.get("memory_buffer", [])[-3:]
+    # Inject the relevance-retrieved memories when the caller supplies them;
+    # otherwise the recency default. Either way it stays a small handful - a
+    # long memory list buries the actual question lower in the prompt, where a
+    # small model under-attends to it.
+    if recalled_memories is not None:
+        memories = recalled_memories
+    else:
+        memories = npc.get("memory_buffer", [])[-3:]
     if memories:
         lines.append("Things you remember:")
         lines.extend(f"- {memory}" for memory in memories)
@@ -615,11 +627,14 @@ def converse_tier1(
     """
     system = build_character_prompt(npc)
     history = _history_messages(npc)
+    # Day 8 (RAG): retrieve the few memories relevant to what the player just
+    # said, out of the now-deep store, instead of injecting the latest few.
+    recalled = recall.recall_relevant(npc.get("memory_buffer", []), player_text, k=3)
     # Restate the player's CURRENT message as the very last thing the model
     # reads, and tell it not to answer an earlier turn - small models otherwise
     # carry conversational momentum and reply to the previous question.
     base_user = (
-        build_situation_block(npc, player_name, rumor_texts)
+        build_situation_block(npc, player_name, rumor_texts, recalled_memories=recalled)
         + f'\n{player_name} just said to you: "{player_text}"\n'
         + f'Reply directly to that latest message ("{player_text}"), NOT to '
         + 'anything said earlier. Respond now with the JSON object, "reply" first.'
