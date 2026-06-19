@@ -555,6 +555,9 @@ def build_character_prompt(npc: dict[str, Any]) -> str:
         "trade and tools, the folk you deal with, your neighbours, and recent "
         "happenings. Answer the player's actual words directly. Never mention "
         "being an AI or a game, and never repeat your earlier lines word-for-word. "
+        "Output ONLY the words you say out loud - no quotation marks around them, "
+        "no narration or stage directions, and never describe your own tone, mood, "
+        "or actions (never write things like 'I reply', 'he said', or '*nods*'). "
     )
     if LLM_STRUCTURED_OUTPUT:
         moods = ", ".join(sorted(VALID_MOODS))
@@ -606,11 +609,16 @@ def build_situation_block(
     mood = npc.get("current_mood", "neutral")
     mood_reason = npc.get("mood_reason", "")
     sentiment = int(npc.get("player_sentiment", 50))
+    # The player is referred to generically as "the traveller", NEVER by name:
+    # a 1.5B model latches onto any proper noun in the prompt and starts treating
+    # the player as a third-party townsperson (worse when the player's name looks
+    # like an NPC's, e.g. "Ceth Blaine"). player_name is kept in the signature for
+    # callers/back-compat but is deliberately not injected.
     lines = [
         "[What you know right now]",
         f"Current mood: {mood}" + (f" ({mood_reason})." if mood_reason else "."),
-        f"You feel {sentiment_phrase(sentiment)} toward {player_name} "
-        f"(sentiment {sentiment}/100).",
+        f"You feel {sentiment_phrase(sentiment)} toward the traveller you are "
+        f"speaking with (sentiment {sentiment}/100).",
     ]
     if rumor_texts:
         lines.append("Rumors you have heard around town (you may bring them up):")
@@ -878,6 +886,17 @@ def _clean_plain_reply(raw: str, current_mood: str) -> str:
                     extracted = value.strip()
                     break
         text = extracted or _fallback_reply(raw)
+    # Strip *stage directions* and a trailing narration clause the model sometimes
+    # tacks on after closing the spoken line (e.g. '...," I reply, my tone neutral.').
+    text = re.sub(r"\*[^*]*\*", "", text)
+    narration = re.search(
+        r'["“”]\s*,?\s*(?:I|he|she|they)\s+'
+        r"(?:reply|replied|say|said|respond|responded|answer|answered|"
+        r"mutter|muttered|continue|continued|add|added|note|noted)\b",
+        text,
+    )
+    if narration:
+        text = text[: narration.start()]
     text = text.strip().strip('"').strip("'").strip()
     text = re.sub(r"^\s*Day\s+\d+:\s*", "", text)
     if not text or _looks_like_json_guts(text):
@@ -954,7 +973,10 @@ def build_conversation_memory(player_name: str, player_text: str, sentiment_delt
         verb = "spoke warmly with me about"
     else:
         verb = "asked me about"
-    return f"{player_name} {verb} {topic}"
+    # Generic "The traveller", never the player's proper name - the same reason
+    # build_situation_block avoids it: a recalled memory carrying the name would
+    # reintroduce the third-party-latching the prompt works to prevent.
+    return f"The traveller {verb} {topic}"
 
 
 # --------------------------------------------------------------------------- #

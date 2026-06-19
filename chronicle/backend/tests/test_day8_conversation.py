@@ -93,7 +93,8 @@ def test_significant_exchange_records_a_keyworded_memory():
     memory = conversation.build_conversation_memory("Aldric", "Did you murder the magistrate?", -7)
     assert memory  # something was recorded
     assert "murder" in memory and "magistrate" in memory  # real keywords for recall
-    assert "Aldric" in memory
+    assert "traveller" in memory.lower()  # player referred to generically, never by name
+    assert "Aldric" not in memory
     assert not memory.startswith("Day ")  # caller stamps the day, not this
 
 
@@ -160,17 +161,35 @@ def test_plain_path_never_raises_on_non_json_output(monkeypatch):
         assert "mood" in result and "sentiment_delta" in result
 
 
-def test_player_name_is_not_peppered_through_the_turn(monkeypatch):
+def test_player_name_never_appears_in_the_turn(monkeypatch):
     # A player named like a townsperson (e.g. "Ceth Blaine") was getting echoed
-    # back / referred to in the third person because the prompt named them 3x.
-    # The instruction tail must name them at most once and forbid the echo.
+    # back / made a third-party suspect because the prompt named them. The player
+    # is now referred to generically, so the name reaches the model ZERO times.
     calls = []
     monkeypatch.setattr(conversation, "_call_llm", lambda **kw: calls.append(kw) or "I'm Mara, the smith.")
     npc = _tier1_npc(mood_reason="after the last conversation")
     conversation.converse_tier1(npc, "Ceth Blaine", "what is your name?", ["a town rumor"])
-    user = calls[0]["user"].lower()
-    assert calls[0]["user"].count("Ceth Blaine") <= 1, "player name should appear at most once"
-    assert "third person" in user and "their name" in user  # explicit anti-echo guidance
+    full = calls[0]["system"] + "\n" + calls[0]["user"]
+    assert "Ceth Blaine" not in full, "the player's proper name must never reach the model"
+    assert "the traveller" in calls[0]["user"].lower()
+    assert "third person" in full.lower()  # explicit anti-echo guidance is present
+
+
+def test_clean_reply_strips_narration_and_stage_directions(monkeypatch):
+    npc = _tier1_npc()
+    # Trailing narration after a closed quote is cut; the spoken line survives.
+    monkeypatch.setattr(
+        conversation, "_call_llm",
+        lambda **kw: 'My name is Voss Farren," I reply, my tone neutral as ever.',
+    )
+    r = conversation.converse_tier1(npc, "Aldric", "what is your name?")
+    assert "Voss Farren" in r["reply"]
+    assert "reply" not in r["reply"].lower() and "tone" not in r["reply"].lower()
+    # *stage directions* are removed.
+    monkeypatch.setattr(conversation, "_call_llm", lambda **kw: "*nods slowly* Aye, the forge runs hot.")
+    r = conversation.converse_tier1(npc, "Aldric", "busy day?")
+    assert "*" not in r["reply"] and "nods" not in r["reply"]
+    assert "forge runs hot" in r["reply"]
 
 
 def test_plain_path_falls_back_to_stub_when_llm_down(monkeypatch):

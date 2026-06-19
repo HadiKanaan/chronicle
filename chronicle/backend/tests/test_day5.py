@@ -164,7 +164,8 @@ def test_situation_block_carries_volatile_context():
         _tier1_npc(), "Aldric Snow", ["Cultists struck the market."]
     )
     assert "Current mood: content" in block
-    assert "Aldric Snow" in block  # disposition toward the player
+    assert "the traveller" in block  # player referred to generically, never by name
+    assert "Aldric Snow" not in block  # a 1.5B model latches onto a name in-prompt
     assert "a storm broke over Aldenmoor" in block  # memory buffer surfaced
     assert "Cultists struck the market." in block  # rumor texts surfaced
 
