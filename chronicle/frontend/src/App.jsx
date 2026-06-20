@@ -114,7 +114,17 @@ export default function App() {
   // instead of needing a manual mute/unmute. Recovery only; the splash still
   // owns the initial unlock, and recover() no-ops until then.
   useEffect(() => {
-    const onGesture = () => audioManager.recover();
+    // Throttled hard: holding an arrow key fires keydown ~30x/s (OS key-repeat),
+    // and recovery only needs to run occasionally - calling into Howler on every
+    // keystroke piled work onto the movement path (and ran even while muted).
+    // Once a second is plenty to heal a suspended context after a share starts.
+    let lastRecover = 0;
+    const onGesture = () => {
+      const t = performance.now();
+      if (t - lastRecover < 1000) return;
+      lastRecover = t;
+      audioManager.recover();
+    };
     window.addEventListener('pointerdown', onGesture);
     window.addEventListener('keydown', onGesture);
     return () => {
