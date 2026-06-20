@@ -127,9 +127,18 @@ _manual_pause = False
 # on a worker thread; any other writer that touches simulated NPC state (the
 # Day 5 conversation endpoint applying card deltas) MUST hold this lock for its
 # whole read-modify-write, or the tick's bulk save will silently overwrite it.
-# Player-only writes (_apply_move) don't need it: the simulation never writes
-# the player NPC.
+# Player-only writes (_apply_move) don't need it against the tick: the
+# simulation never writes the player NPC.
 _sim_lock = threading.Lock()
+
+# But rapid player moves race EACH OTHER: post_input is a sync endpoint, so
+# concurrent move POSTs run on parallel threadpool threads, and an unlocked
+# read-modify-write of the player NPC can lose steps (two reads see the same
+# tile, the later save clobbers the earlier). At a brisk sprint that lost-update
+# made the prediction outrun the backend and snap back. This lock serializes the
+# player-move read-modify-write so every step lands; it never contends with the
+# tick (which doesn't touch the player), so moves stay cheap.
+_player_move_lock = threading.Lock()
 
 
 def _advance_one_hour() -> None:
@@ -687,29 +696,32 @@ def _apply_move(direction: str) -> bool:
     delta = _MOVE_DELTAS.get(direction)
     if delta is None:
         return False
-    state = get_world_state()
-    if not state:
-        return False
-    player_id = state.get("player_npc_id")
-    if not player_id:
-        return False
-    npc = get_npc(player_id)
-    if not npc:
-        return False
+    # Serialize the whole read-modify-write so concurrent move POSTs can't lose
+    # steps by reading the same tile and clobbering each other.
+    with _player_move_lock:
+        state = get_world_state()
+        if not state:
+            return False
+        player_id = state.get("player_npc_id")
+        if not player_id:
+            return False
+        npc = get_npc(player_id)
+        if not npc:
+            return False
 
-    region = state["region"]
-    target_x = int(round(npc.get("x", 0))) + delta[0]
-    target_y = int(round(npc.get("y", 0))) + delta[1]
-    if not (0 <= target_x < region["width"] and 0 <= target_y < region["height"]):
-        return False
-    tile = region["tiles"][target_y][target_x]
-    if not tile.get("passable", True):
-        return False
+        region = state["region"]
+        target_x = int(round(npc.get("x", 0))) + delta[0]
+        target_y = int(round(npc.get("y", 0))) + delta[1]
+        if not (0 <= target_x < region["width"] and 0 <= target_y < region["height"]):
+            return False
+        tile = region["tiles"][target_y][target_x]
+        if not tile.get("passable", True):
+            return False
 
-    npc["x"] = float(target_x)
-    npc["y"] = float(target_y)
-    save_npc(npc)
-    return True
+        npc["x"] = float(target_x)
+        npc["y"] = float(target_y)
+        save_npc(npc)
+        return True
 
 
 def _visible_tile_keys(region: dict[str, Any], cx: float, cy: float) -> set[str]:
@@ -902,13 +914,18 @@ def _build_render_payload() -> RenderPayload:
 
     # Day 6: display-ready strings only - the newest whispers and the Demon
     # Lord's recent moves, newest first. Raw rumor/decision dicts stay backend.
+    # The Demon Lord's dawn decision also seeds a high-drama rumor with the SAME
+    # text, so surfacing both made "Rumors Abroad" echo the "Demon Lord" panel
+    # verbatim. Keep DL-origin rumors (id ..._demonlord) out of the gossip panel
+    # - they have their own panel and still spread + colour dialogue. Rumors
+    # Abroad now shows organic town gossip only.
     rumor_lines = [
         f"{rumor['current_text']} (known to {len(rumor.get('known_by_npc_ids', []))})"
         for rumor in sorted(
             get_active_rumors(), key=lambda r: str(r.get("id", "")), reverse=True
-        )[:4]
-        if rumor.get("current_text")
-    ]
+        )
+        if rumor.get("current_text") and "demonlord" not in str(rumor.get("id", ""))
+    ][:4]
     decision_lines = [
         entry.get("summary", "")
         for entry in reversed(world_state_data.get("demon_lord_decisions", [])[-3:])

@@ -31,15 +31,15 @@ const CANVAS_H = VIEW_ROWS * DISPLAY_TILE;
 // Per-entity glide durations. The player glides one tile per accepted step;
 // simulated NPCs step one tile/second on the backend, so a ~1s glide makes a
 // walking villager flow continuously tile-to-tile instead of step-pausing.
-const PLAYER_LERP_MS = 150;
+const PLAYER_LERP_MS = 50;
 const NPC_LERP_MS = 950;
 // Minimum real time between accepted player steps. Holding a key fires keydown
-// at the OS repeat rate (~30/s), which let the optimistic prediction sprint far
-// ahead of what the backend applies (one move per POST, with rapid concurrent
-// POSTs racing) and then snap back on reconcile. Capping the step rate to one
-// per this interval keeps the prediction in lockstep with the backend, so a
-// held key never outruns it. Matched to PLAYER_LERP_MS for gap-free motion.
-const MOVE_COOLDOWN_MS = 150;
+// at the OS repeat rate (~30/s); without a cap the optimistic prediction sprinted
+// far ahead of what the backend applied and snapped back on reconcile. Capping
+// the step rate keeps prediction in lockstep with the backend. The backend now
+// serializes player moves (_player_move_lock), so it never drops a step at this
+// rate either. Matched to PLAYER_LERP_MS for gap-free motion. ~20 tiles/s.
+const MOVE_COOLDOWN_MS = 50;
 // After the player stops driving, reconcile the predicted position back to the
 // backend's authoritative tile (covers any dropped move intent).
 const RECONCILE_IDLE_MS = 400;
