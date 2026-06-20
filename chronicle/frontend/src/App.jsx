@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getState, getConversationContext, sendConversation, sendInput, sendVoice } from './api';
 import { audioManager } from './audio';
 import GameCanvas from './GameCanvas';
@@ -31,6 +31,29 @@ const EMPTY_STATE = {
   manually_paused: false
 };
 
+// "In front of you" range (tiles) for the direct-talk button/hotkey. Covers
+// orthogonal (1.0) and diagonal (1.41) adjacency with a little forgiveness.
+const TALK_RANGE = 1.8;
+
+// The nearest NPC to the player within TALK_RANGE, or null. Lets the player talk
+// to an adjacent NPC without clicking them on the canvas - which is the only way
+// to reach someone standing under a HUD plate (e.g. the Demon Lord in his
+// corner), since the overlay intercepts the click.
+function findNearbyNpc(gameState) {
+  const player = gameState?.player;
+  if (!player) return null;
+  let nearest = null;
+  let best = TALK_RANGE;
+  for (const npc of gameState.npcs ?? []) {
+    const dist = Math.hypot(npc.x - player.x, npc.y - player.y);
+    if (dist <= best) {
+      best = dist;
+      nearest = npc;
+    }
+  }
+  return nearest;
+}
+
 export default function App() {
   const [gameState, setGameState] = useState(EMPTY_STATE);
   // Dialogue is temporary UI state only: the backend owns the cards and the
@@ -53,6 +76,13 @@ export default function App() {
   // event so the control label stays correct even when the user exits with the
   // OS shortcut (Esc / F11) instead of our control.
   const [isFullscreen, setIsFullscreen] = useState(false);
+
+  // Latest snapshots so the once-registered keyboard "talk" shortcut always acts
+  // on the current world, not a stale closure.
+  const gameStateRef = useRef(gameState);
+  gameStateRef.current = gameState;
+  const dialogueRef = useRef(dialogue);
+  dialogueRef.current = dialogue;
 
   const setPaused = (paused) => {
     sendInput({ type: 'toggle_pause', payload: { paused } }).catch(() => {});
@@ -156,6 +186,10 @@ export default function App() {
       } else if (event.key === 'f' || event.key === 'F') {
         event.preventDefault();
         toggleFullscreen();
+      } else if (event.key === 'e' || event.key === 'E') {
+        // Talk to whoever is right in front of you (reaches NPCs the HUD covers).
+        event.preventDefault();
+        talkToNearest();
       } else if (event.key === 'Escape') {
         event.preventDefault();
         // Esc closes the continent map first if it's up; otherwise it toggles
@@ -217,6 +251,15 @@ export default function App() {
     }
   };
 
+  // Open dialogue with the NPC in front of the player (button + E key). Reads
+  // the latest world from refs so the keyboard shortcut never acts on stale
+  // state; no-ops if a dialogue is already open or no one is in range.
+  const talkToNearest = () => {
+    if (dialogueRef.current) return;
+    const npc = findNearbyNpc(gameStateRef.current);
+    if (npc) openDialogue(npc);
+  };
+
   const sendLine = async (text) => {
     const npcId = dialogue?.npcId;
     if (!npcId || !text.trim()) {
@@ -273,6 +316,9 @@ export default function App() {
     revealInteriors
   };
 
+  // Whoever the player can talk to right now (drives the contextual Talk button).
+  const nearbyNpc = dialogue ? null : findNearbyNpc(gameState);
+
   const closeDialogue = () => {
     setDialogue(null);
     // Resume the world clock when the dialogue window closes.
@@ -302,6 +348,20 @@ export default function App() {
         <Minimap gameState={visibleState} />
       </div>
 
+      {/* Contextual "talk to whoever is in front of you" button — reaches NPCs
+          the HUD overlay covers (e.g. the Demon Lord in his corner). */}
+      {nearbyNpc ? (
+        <div style={styles.talkPrompt}>
+          <button
+            className="cv-btn cv-btn-primary cv-fade-in"
+            style={styles.talkBtn}
+            onClick={() => openDialogue(nearbyNpc)}
+          >
+            💬 Talk to {nearbyNpc.name} (E)
+          </button>
+        </div>
+      ) : null}
+
       {/* Bottom-center controls strip. */}
       <div style={styles.bottomCenter}>
         <button
@@ -318,7 +378,7 @@ export default function App() {
         >
           {isFullscreen ? '⛶ Exit fullscreen' : '⛶ Fullscreen'}
         </button>
-        <span style={styles.hint}>Esc menu · M map · R fog · P pause · B interiors · F fullscreen</span>
+        <span style={styles.hint}>E talk · Esc menu · M map · R fog · P pause · B interiors · F fullscreen</span>
       </div>
 
       {/* Sticky manual-pause indicator (when paused outside the menu). */}
@@ -380,6 +440,17 @@ const styles = {
     display: 'flex',
     alignItems: 'center',
     gap: '12px',
+  },
+  talkPrompt: {
+    position: 'fixed',
+    bottom: '54px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 12,
+  },
+  talkBtn: {
+    fontSize: '14px',
+    padding: '9px 18px',
   },
   revealBtn: { fontSize: '12px', padding: '6px 12px' },
   revealOn: {

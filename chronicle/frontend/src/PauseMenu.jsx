@@ -14,6 +14,7 @@ import { COLORS, FONTS, plate } from './theme';
 const CONTROLS = [
   ['Arrow keys', 'Walk around the town'],
   ['Click a villager', 'Talk to them (they remember you)'],
+  ['E', 'Talk to whoever is in front of you'],
   ['M', 'Continent map overlay'],
   ['R', 'Toggle fog of war'],
   ['B', 'Reveal building interiors'],
