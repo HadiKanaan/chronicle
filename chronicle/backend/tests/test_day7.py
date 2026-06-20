@@ -212,6 +212,32 @@ def test_generate_continent_shape_and_features():
         assert "name" in country and "capital" in country
 
 
+def test_continent_biomes_are_2d_not_latitude_bands():
+    """Biomes must form regions, not pure horizontal latitude stripes.
+
+    The old climate model made temperature a function of y only, so every row was
+    a single biome (~1.0 distinct biomes/row). Temperature is now driven by a 2D
+    warmth field (plus a lowland-wetland overlay), so rows mix biomes.
+    """
+    from collections import defaultdict
+
+    from systems import continent
+
+    payload = continent.generate_continent()
+    assert payload.get("version") == continent.CONTINENT_VERSION
+    land = [c for c in payload["cells"] if c["land"]]
+    biomes = {c["biome"] for c in land}
+    # More than a two-band map: at least three distinct biomes appear.
+    assert len(biomes) >= 3
+
+    rows = defaultdict(set)
+    for c in land:
+        rows[c["y"]].add(c["biome"])
+    avg_per_row = sum(len(s) for s in rows.values()) / max(1, len(rows))
+    # Pure bands score 1.0; regions score well above it.
+    assert avg_per_row > 1.3
+
+
 def test_country_property_constraints_are_enforced():
     from ml import train as ml
 

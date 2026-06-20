@@ -1401,7 +1401,10 @@ def get_continent_map() -> JSONResponse:
     frontend fetches this exactly once (never in the 500ms poll). The continent
     is purely graphical - only Aldenmoor is deeply simulated."""
     cached = get_continent()
-    if cached is None:
+    # Regenerate when absent OR when the cached map predates the current
+    # generation version (the map is purely graphical, so rebuilding it is free
+    # and never touches the simulated town).
+    if cached is None or cached.get("version") != continent.CONTINENT_VERSION:
         cached = continent.generate_continent()
         save_continent(cached)
         log_event(

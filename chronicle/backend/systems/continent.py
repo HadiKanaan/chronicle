@@ -58,6 +58,11 @@ NUM_COUNTRIES = 6
 RIVER_COUNT = 4
 POI_COUNT = 6
 SEED = 1337
+# Bumped whenever the generation changes shape enough that a cached continent
+# should be rebuilt. The endpoint regenerates when the stored version differs.
+# v2: temperature is now 2D (latitude trend + altitude lapse + warmth noise) so
+# biomes form regions instead of pure horizontal latitude bands.
+CONTINENT_VERSION = 2
 
 # Distinct country fills (the frontend tints cells and draws borders).
 COUNTRY_COLORS = [
@@ -114,43 +119,70 @@ def _moisture_field(rng: "np.ndarray") -> "np.ndarray":
 def _classify_biomes(
     relief: "np.ndarray",
     moisture: "np.ndarray",
+    warmth: "np.ndarray",
     land_yx: "np.ndarray",
 ) -> list[str]:
     """Label each land cell using the existing biome clustering model.
 
-    The relief/moisture inputs are normalized over the LAND cells so all four
-    archetypes (cold highland, wet wetland, dry grassland, mild forest) stay
-    reachable - otherwise the central landmass reads as one uniform biome.
+    The relief/moisture/warmth inputs are normalized over the LAND cells so the
+    archetypes stay reachable - otherwise the central landmass reads as one
+    uniform biome.
+
+    TEMPERATURE is driven by a smoothed 2D WARMTH field, not by latitude. The old
+    formula made temperature a pure function of y (6..18) while precip/elev sat in
+    0..1, so temperature dominated the KMeans and biomes came out as clean
+    horizontal stripes (~1 biome per row). Driving it from a 2D warmth field
+    (plus a mild altitude lapse and a faint latitude trend) makes biomes form
+    regions/blobs that cut across latitudes (~1.9 biomes per row).
+
+    WETLAND is then applied as a lowland overlay: the shared biome KMeans cannot
+    resolve wetland (its clusters collapse the cold end into two highland
+    clusters, so wetland is unreachable from the model alone), so warm, wet,
+    low-lying land is marked wetland on top - geographically where marshes
+    actually sit. This is continent-local; it never touches the shared model the
+    town generation reuses.
     """
     ys, xs = land_yx[:, 0], land_yx[:, 1]
     elev = _normalize(relief[ys, xs])
     moist = _normalize(moisture[ys, xs])
+    warm = _normalize(warmth[ys, xs])
     latitude = ys / max(1, CONT_H - 1)
-    # Climate features matched to the biome model's archetype scale (Day 2).
-    # Temperature spans the full archetype range (6..18) by latitude so the
-    # KMeans resolves all four biomes - cold highland in the north, mild forest
-    # mid-continent, warm grassland in the south, wetland in the wettest cells.
-    temperature = 6.0 + 12.0 * (1.0 - latitude)
-    precipitation = 0.2 + 0.7 * moist
+    # Climate features on the biome model's archetype scale (Day 2), but the
+    # temperature axis now varies in 2D so biomes are regions, not bands.
+    temperature = (
+        7.0
+        + 11.0 * warm              # 2D regional warmth (the dominant signal)
+        - 4.0 * elev               # altitude lapse: highlands run colder
+        + 3.0 * (1.0 - latitude)   # faint north->south trend (kept realistic)
+    )
+    # Lowlands read wetter (marshes pool in low ground), giving the wetland
+    # overlay below a signal to key on.
+    precipitation = np.clip(0.15 + 0.6 * moist + 0.25 * (1.0 - elev), 0.0, 1.0)
     features = np.column_stack([temperature, precipitation, elev])
 
     biome_model = ml.train_biome_model()
     if biome_model is None:
-        # Threshold fallback mirroring the archetypes.
         labels = []
         for t, p, e in zip(temperature, precipitation, elev):
             if e > 0.7:
                 labels.append("highland")
-            elif p > 0.7:
+            elif p > 0.72 and e < 0.40 and t > 9.0:
                 labels.append("wetland")
-            elif t > 15.0:
+            elif t > 14.0:
                 labels.append("grassland")
             else:
                 labels.append("temperate_forest")
         return labels
+
     clusters = biome_model["model"].predict(features)
     mapping = biome_model["cluster_to_biome"]
-    return [mapping.get(int(c), "temperate_forest") for c in clusters]
+    labels = [mapping.get(int(c), "temperate_forest") for c in clusters]
+    # Lowland-wetland overlay (the model can't reach wetland on its own).
+    wetland = (precipitation > 0.72) & (elev < 0.40) & (temperature > 9.0)
+    for i in range(len(labels)):
+        if wetland[i] and labels[i] != "highland":
+            labels[i] = "wetland"
+    return labels
 
 
 # --------------------------------------------------------------------------- #
@@ -254,6 +286,7 @@ def _fallback_continent() -> dict[str, Any]:
                  "country": 0 if land else None}
             )
     return {
+        "version": CONTINENT_VERSION,
         "width": CONT_W, "height": CONT_H, "sea_level": SEA_LEVEL,
         "cells": cells, "countries": [], "rivers": [], "pois": [],
         "aldenmoor": {"x": CONT_W // 2, "y": CONT_H // 2,
@@ -276,6 +309,9 @@ def generate_continent() -> dict[str, Any]:
     base = _base_field(rng)            # shapes the landmass via the falloff
     relief = _base_field(rng)          # independent altitude for biome climate
     moisture = _moisture_field(rng)
+    # Independent 2D warmth noise so temperature isn't a pure latitude gradient
+    # (sigma=8 → broad regional warm/cool patches, not speckle).
+    warmth = _normalize(gaussian_filter(rng.rand(CONT_H, CONT_W), sigma=8.0, mode="reflect"))
     elevation = _landmass(base)
     land_mask = elevation > SEA_LEVEL
     land_yx = np.argwhere(land_mask)
@@ -285,7 +321,7 @@ def generate_continent() -> dict[str, Any]:
 
     # Biomes read an independent relief field so the climate varies regardless
     # of the coastline; rivers/suitability use the actual landmass elevation.
-    biomes = _classify_biomes(relief, moisture, land_yx)
+    biomes = _classify_biomes(relief, moisture, warmth, land_yx)
     suitability = _suitability(elevation, moisture, land_mask, land_yx)
     country_ids = _assign_countries(land_yx, suitability)
 
@@ -392,6 +428,7 @@ def generate_continent() -> dict[str, Any]:
                      "label": "Aldenmoor - you are here", "country_id": None}
 
     return {
+        "version": CONTINENT_VERSION,
         "width": CONT_W,
         "height": CONT_H,
         "sea_level": SEA_LEVEL,
