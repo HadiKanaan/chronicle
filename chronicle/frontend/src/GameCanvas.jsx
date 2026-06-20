@@ -28,11 +28,18 @@ const VIEW_ROWS = 19;
 const CANVAS_W = VIEW_COLS * DISPLAY_TILE;
 const CANVAS_H = VIEW_ROWS * DISPLAY_TILE;
 
-// Per-entity glide durations. The player snaps quickly so input feels direct;
+// Per-entity glide durations. The player glides one tile per accepted step;
 // simulated NPCs step one tile/second on the backend, so a ~1s glide makes a
 // walking villager flow continuously tile-to-tile instead of step-pausing.
-const PLAYER_LERP_MS = 110;
+const PLAYER_LERP_MS = 150;
 const NPC_LERP_MS = 950;
+// Minimum real time between accepted player steps. Holding a key fires keydown
+// at the OS repeat rate (~30/s), which let the optimistic prediction sprint far
+// ahead of what the backend applies (one move per POST, with rapid concurrent
+// POSTs racing) and then snap back on reconcile. Capping the step rate to one
+// per this interval keeps the prediction in lockstep with the backend, so a
+// held key never outruns it. Matched to PLAYER_LERP_MS for gap-free motion.
+const MOVE_COOLDOWN_MS = 150;
 // After the player stops driving, reconcile the predicted position back to the
 // backend's authoritative tile (covers any dropped move intent).
 const RECONCILE_IDLE_MS = 400;
@@ -132,6 +139,10 @@ export default function GameCanvas({ gameState, onNpcClick }) {
   // next poll. Reconciled against the authoritative position once idle.
   const predictRef = useRef(null);
   const lastMoveAtRef = useRef(0);
+  // Separate from lastMoveAtRef (which the reconcile timer reads): this throttles
+  // EVERY step attempt, including ones blocked by a wall, so the cooldown holds
+  // regardless of outcome.
+  const lastStepAtRef = useRef(0);
 
   // Preload every atlas image once. A redraw is triggered via imagesReady.
   useEffect(() => {
@@ -277,6 +288,12 @@ export default function GameCanvas({ gameState, onNpcClick }) {
       const direction = directionMap[event.key];
       if (!direction) return;
       event.preventDefault();
+
+      // Cap the step rate so a held key can't outrun the backend (see
+      // MOVE_COOLDOWN_MS). Throttles every attempt, accepted or wall-blocked.
+      const nowTs = performance.now();
+      if (nowTs - lastStepAtRef.current < MOVE_COOLDOWN_MS) return;
+      lastStepAtRef.current = nowTs;
 
       // Optimistic move: glide the player immediately toward the next tile if it
       // is passable (same rule the backend uses), then post the intent. The
