@@ -139,14 +139,11 @@ export class AudioManager {
     // Every Web Audio touch below is guarded. Starting a screen-share that
     // captures this tab's audio (or an output-device change) can suspend or
     // interrupt the AudioContext, after which Howler calls throw. Audio is
-    // best-effort (Day 9), so we resume a suspended context when we can and
-    // swallow anything that still throws - a struggling audio layer must NEVER
-    // propagate into the game's poll/render loop (an earlier version let this
-    // blank the world to EMPTY_STATE every 200ms while sharing audio).
+    // best-effort (Day 9), so a struggling audio layer must NEVER propagate into
+    // the game's poll/render loop (an earlier version let this blank the world to
+    // EMPTY_STATE every 200ms while sharing audio).
     try {
-      if (Howler.ctx && Howler.ctx.state === 'suspended') {
-        Howler.ctx.resume().catch(() => {});
-      }
+      this.recover(); // resume a suspended context + restart the OST if it dropped
       // Day<->night flip: crossfade the OST to the other pool.
       if (flipped && this.musicNight !== isNight(timeOfDay)) {
         this._startMusicPool(isNight(timeOfDay));
@@ -154,6 +151,29 @@ export class AudioManager {
       this._syncAmbient(weather, timeOfDay);
     } catch (error) {
       // Interrupted context / device change mid-call: ignore and retry next poll.
+    }
+  }
+
+  // Recover audio after an interruption - notably when a screen-share starts
+  // capturing this tab's audio, which suspends the AudioContext and PAUSES the
+  // HTML5-streamed OST. Safe to call from the poll loop OR a user gesture: a
+  // gesture-context resume succeeds even when the browser blocks a gesture-less
+  // one, so calling this on the player's keypresses makes audio self-heal almost
+  // instantly instead of needing a manual mute/unmute. Idempotent and guarded.
+  recover() {
+    if (!this.unlocked) return;
+    try {
+      const ctx = Howler.ctx;
+      if (ctx && ctx.state !== 'running') {
+        ctx.resume().catch(() => {});
+      }
+      // The OST streams via an HTML5 <audio> element; resuming the context does
+      // NOT un-pause that element, so nudge it back once the context is running.
+      if (ctx && ctx.state === 'running' && this.musicHowl && !this.musicHowl.playing()) {
+        this.musicHowl.play();
+      }
+    } catch (error) {
+      // never throws into the caller (poll loop or gesture handler)
     }
   }
 

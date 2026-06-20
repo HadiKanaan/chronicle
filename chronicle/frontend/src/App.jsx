@@ -106,6 +106,23 @@ export default function App() {
     return () => document.removeEventListener('fullscreenchange', onChange);
   }, []);
 
+  // Audio recovery on any user gesture. When a screen-share starts capturing this
+  // tab's audio, the AudioContext suspends and the OST pauses; the poll loop
+  // already retries via audioManager.update(), but a gesture-context resume
+  // succeeds even when a gesture-less one is blocked - and the player is
+  // constantly pressing movement keys, so audio self-heals within a keypress
+  // instead of needing a manual mute/unmute. Recovery only; the splash still
+  // owns the initial unlock, and recover() no-ops until then.
+  useEffect(() => {
+    const onGesture = () => audioManager.recover();
+    window.addEventListener('pointerdown', onGesture);
+    window.addEventListener('keydown', onGesture);
+    return () => {
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+    };
+  }, []);
+
   const resumeFromPauseMenu = () => {
     setShowPauseMenu(false);
     setPaused(false);
