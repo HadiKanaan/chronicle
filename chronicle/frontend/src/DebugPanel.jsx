@@ -1,58 +1,63 @@
 import { useState } from 'react';
 import { sendDebug, sendInput } from './api';
+import { COLORS, FONTS } from './theme';
 
-// Demo/debug control panel: set time and faction scores, and fire a dawn tick
-// on cue (to show the ML batch react live). Inputs use LOCAL state, snapshotted
-// from the world when the panel opens, so the 500ms /api/state poll never
-// clobbers what you're typing.
+// Demo/debug controls, themed for the Day 10 pause-menu Debug tab. Set time and
+// faction scores, fire a dawn tick on cue (to show the ML batch react live),
+// switch the LLM provider, and clear chat history. Inputs use LOCAL state,
+// snapshotted from the world when the tab mounts, so the 200ms /api/state poll
+// never clobbers what you're typing. Backend stays authoritative — every button
+// only posts an existing intent.
 export default function DebugPanel({ gameState }) {
-  const [open, setOpen] = useState(false);
-  const [day, setDay] = useState('1');
-  const [hour, setHour] = useState('6');
-  const [facValues, setFacValues] = useState({});
-
   const factionNames = Object.keys(gameState.faction_reputations ?? {});
   const paused = Boolean(gameState.manually_paused);
 
-  const openPanel = () => {
-    setDay(String(gameState.current_day ?? 1));
-    setHour(String(gameState.current_hour ?? 6));
+  const [day, setDay] = useState(String(gameState.current_day ?? 1));
+  const [hour, setHour] = useState(String(gameState.current_hour ?? 6));
+  const [facValues, setFacValues] = useState(() => {
     const snapshot = {};
     for (const name of factionNames) {
       snapshot[name] = {
         rep: String(gameState.faction_reputations?.[name] ?? 50),
-        morale: String(gameState.faction_morale?.[name] ?? 60)
+        morale: String(gameState.faction_morale?.[name] ?? 60),
       };
     }
-    setFacValues(snapshot);
-    setOpen(true);
-  };
+    return snapshot;
+  });
 
   const setField = (name, key, value) =>
     setFacValues((current) => ({ ...current, [name]: { ...current[name], [key]: value } }));
 
-  if (!open) {
-    return (
-      <button style={styles.toggle} onClick={openPanel}>
-        ⚙ Debug controls
-      </button>
-    );
-  }
-
   return (
-    <section style={styles.panel}>
-      <div style={styles.header}>
-        <strong>Debug controls</strong>
-        <button style={styles.close} onClick={() => setOpen(false)}>
-          hide
-        </button>
+    <div style={styles.panel}>
+      <div style={styles.group}>
+        <div style={styles.label}>Conversation engine</div>
+        <div style={styles.row}>
+          <span style={styles.providerName}>
+            LLM: <strong style={styles.accentText}>{gameState.llm_provider ?? 'local'}</strong>
+            {gameState.llm_last_seconds ? (
+              <span style={styles.muted}> · {gameState.llm_last_seconds}s last</span>
+            ) : null}
+          </span>
+          <button
+            className="cv-btn"
+            style={styles.btn}
+            onClick={() => sendInput({ type: 'toggle_provider', payload: {} }).catch(() => {})}
+          >
+            switch
+          </button>
+        </div>
+        {gameState.azure_available === false ? (
+          <div style={styles.legend}>Azure not configured — toggle stays local</div>
+        ) : null}
       </div>
 
       <div style={styles.group}>
         <div style={styles.label}>Time</div>
         <div style={styles.row}>
           <button
-            style={paused ? styles.btnResume : styles.btnAccent}
+            className={paused ? 'cv-btn cv-btn-primary' : 'cv-btn'}
+            style={styles.btn}
             onClick={() =>
               sendInput({ type: 'toggle_pause', payload: { paused: !paused } }).catch(() => {})
             }
@@ -68,6 +73,7 @@ export default function DebugPanel({ gameState }) {
             Hour <input style={styles.num} value={hour} onChange={(e) => setHour(e.target.value)} />
           </label>
           <button
+            className="cv-btn"
             style={styles.btn}
             onClick={() => sendDebug('set_time', { day: Number(day), hour: Number(hour) }).catch(() => {})}
           >
@@ -75,10 +81,10 @@ export default function DebugPanel({ gameState }) {
           </button>
         </div>
         <div style={styles.row}>
-          <button style={styles.btn} onClick={() => sendDebug('advance_hour').catch(() => {})}>
+          <button className="cv-btn" style={styles.btn} onClick={() => sendDebug('advance_hour').catch(() => {})}>
             Advance hour
           </button>
-          <button style={styles.btnAccent} onClick={() => sendDebug('trigger_dawn').catch(() => {})}>
+          <button className="cv-btn cv-btn-primary" style={styles.btn} onClick={() => sendDebug('trigger_dawn').catch(() => {})}>
             Trigger dawn (run ML)
           </button>
         </div>
@@ -100,12 +106,13 @@ export default function DebugPanel({ gameState }) {
               onChange={(e) => setField(name, 'morale', e.target.value)}
             />
             <button
+              className="cv-btn"
               style={styles.btn}
               onClick={() =>
                 sendDebug('set_faction', {
                   faction: name,
                   reputation: Number(facValues[name]?.rep),
-                  morale: Number(facValues[name]?.morale)
+                  morale: Number(facValues[name]?.morale),
                 }).catch(() => {})
               }
             >
@@ -117,90 +124,40 @@ export default function DebugPanel({ gameState }) {
 
       <div style={styles.group}>
         <div style={styles.label}>Conversations</div>
-        <button
-          style={styles.btn}
-          onClick={() => sendDebug('clear_history').catch(() => {})}
-        >
+        <button className="cv-btn" style={styles.btn} onClick={() => sendDebug('clear_history').catch(() => {})}>
           Clear all NPC chat history
         </button>
       </div>
-    </section>
+    </div>
   );
 }
 
 const styles = {
-  toggle: {
-    marginTop: '16px',
-    width: '100%',
-    background: '#1b2030',
-    color: '#9aa4b2',
-    border: '1px dashed #39414d',
-    borderRadius: '4px',
-    padding: '6px',
-    cursor: 'pointer',
-    fontSize: '12px'
+  panel: { display: 'flex', flexDirection: 'column', gap: '4px', fontFamily: FONTS.body },
+  group: { marginTop: '6px' },
+  label: {
+    color: COLORS.gold,
+    fontSize: '10px',
+    marginBottom: '5px',
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    fontFamily: FONTS.display,
   },
-  panel: {
-    marginTop: '16px',
-    background: '#15171f',
-    border: '1px solid #39414d',
-    borderRadius: '5px',
-    padding: '10px'
-  },
-  header: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: '8px',
-    color: '#d6dae1'
-  },
-  close: {
-    background: '#222833',
-    color: '#f5f5f5',
-    border: '1px solid #39414d',
-    borderRadius: '4px',
-    padding: '2px 8px',
-    cursor: 'pointer',
-    fontSize: '11px'
-  },
-  group: { marginTop: '8px' },
-  label: { color: '#8a93a3', fontSize: '11px', marginBottom: '4px', textTransform: 'uppercase' },
   row: { display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px', flexWrap: 'wrap' },
-  inline: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: '#c9cfd8' },
-  fname: { flex: '1 1 120px', fontSize: '12px', color: '#c9cfd8' },
+  inline: { display: 'flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: COLORS.creamDim },
+  providerName: { fontSize: '12px', color: COLORS.creamDim, flex: '1 1 auto' },
+  accentText: { color: COLORS.goldBright },
+  fname: { flex: '1 1 120px', fontSize: '12px', color: COLORS.creamDim },
   num: {
     width: '48px',
     background: '#0e1118',
-    color: '#f5f5f5',
-    border: '1px solid #39414d',
+    color: COLORS.cream,
+    border: `1px solid ${COLORS.frameDark}`,
     borderRadius: '3px',
-    padding: '2px 4px'
+    padding: '3px 4px',
+    fontFamily: FONTS.body,
   },
-  btn: {
-    background: '#222833',
-    color: '#f5f5f5',
-    border: '1px solid #39414d',
-    borderRadius: '4px',
-    padding: '2px 10px',
-    cursor: 'pointer',
-    fontSize: '12px'
-  },
-  btnAccent: {
-    background: '#3a2f12',
-    color: '#f0d9a0',
-    border: '1px solid #6b5520',
-    borderRadius: '4px',
-    padding: '2px 10px',
-    cursor: 'pointer',
-    fontSize: '12px'
-  },
-  btnResume: {
-    background: '#12233a',
-    color: '#a8c7f0',
-    border: '1px solid #4a76c4',
-    borderRadius: '4px',
-    padding: '2px 10px',
-    cursor: 'pointer',
-    fontSize: '12px'
-  }
+  btn: { fontSize: '12px', padding: '4px 10px' },
+  muted: { color: COLORS.muted },
+  legend: { color: COLORS.muted, fontSize: '11px', marginTop: '2px' },
 };

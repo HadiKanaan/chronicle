@@ -1,20 +1,20 @@
 import { useState } from 'react';
 import { sendInput } from './api';
 import { audioManager } from './audio';
+import { COLORS, FONTS } from './theme';
 
-// Day 9 HUD audio panel: master mute, the three channel volume sliders, the
-// NPC-voice on/off toggle (wired to the backend toggle_voice), and the required
-// Ivan Duch credit. The manager is the single source of audio truth; this panel
-// just drives it. Voice availability/enabled come from the render payload so the
-// control reflects the backend's authoritative state.
+// Per-channel sound controls, themed for the Day 10 pause-menu Sound tab. The
+// master mute + master volume live one level up in PauseMenu; this panel owns the
+// four channel sliders (music/ambient/voice/sfx), the NPC-voice on/off toggle
+// (wired to the backend toggle_voice), and the required Ivan Duch credit. The
+// AudioManager singleton is the source of audio truth; this just drives it.
+// Voice availability/enabled come from the render payload so the control reflects
+// the backend's authoritative state.
 export default function AudioPanel({ gameState }) {
-  const [muted, setMuted] = useState(audioManager.masterMuted);
   const [volumes, setVolumes] = useState({ ...audioManager.volumes });
 
   const voiceAvailable = gameState.voice_available ?? false;
   const voiceEnabled = gameState.voice_enabled ?? true;
-
-  const onMute = () => setMuted(audioManager.toggleMasterMute());
 
   const onVolume = (channel, value) => {
     const v = Number(value);
@@ -28,14 +28,7 @@ export default function AudioPanel({ gameState }) {
   };
 
   return (
-    <section style={styles.section}>
-      <div style={styles.headerRow}>
-        <h2 style={styles.heading}>Audio</h2>
-        <button style={muted ? styles.muteOn : styles.muteBtn} onClick={onMute}>
-          {muted ? '🔇 Muted' : '🔊 Sound'}
-        </button>
-      </div>
-
+    <div style={styles.wrap}>
       {['music', 'ambient', 'voice', 'sfx'].map((channel) => (
         <label key={channel} style={styles.sliderRow}>
           <span style={styles.sliderLabel}>{channel}</span>
@@ -48,19 +41,23 @@ export default function AudioPanel({ gameState }) {
             onChange={(event) => onVolume(channel, event.target.value)}
             style={styles.slider}
           />
+          <span style={styles.readout}>{Math.round(volumes[channel] * 100)}%</span>
         </label>
       ))}
 
       <div style={styles.voiceRow}>
-        <span>
+        <span style={styles.voiceLabel}>
           NPC voices:{' '}
-          <strong>{voiceAvailable ? (voiceEnabled ? 'on' : 'off') : 'unavailable'}</strong>
+          <strong style={styles.voiceState}>
+            {voiceAvailable ? (voiceEnabled ? 'on' : 'off') : 'unavailable'}
+          </strong>
         </span>
         <button
-          style={styles.voiceBtn}
+          className="cv-btn"
           onClick={onToggleVoice}
           disabled={!voiceAvailable}
           title={voiceAvailable ? 'Toggle Azure NPC voices' : 'Azure Speech not configured'}
+          style={styles.voiceBtn}
         >
           {voiceEnabled ? '🗣 mute voices' : '🗣 unmute voices'}
         </button>
@@ -70,75 +67,53 @@ export default function AudioPanel({ gameState }) {
       ) : null}
 
       <div style={styles.credit}>Music by Ivan Duch</div>
-    </section>
+    </div>
   );
 }
 
 const styles = {
-  section: { marginTop: '20px' },
-  headerRow: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center'
-  },
-  heading: { margin: '0 0 8px', fontSize: '16px' },
-  muteBtn: {
-    background: '#222833',
-    color: '#f5f5f5',
-    border: '1px solid #39414d',
-    borderRadius: '4px',
-    padding: '2px 8px',
-    cursor: 'pointer',
-    fontSize: '11px'
-  },
-  muteOn: {
-    background: '#3a2026',
-    color: '#e08a8a',
-    border: '1px solid #5a2a32',
-    borderRadius: '4px',
-    padding: '2px 8px',
-    cursor: 'pointer',
-    fontSize: '11px'
-  },
+  wrap: { display: 'flex', flexDirection: 'column', gap: '4px' },
   sliderRow: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
-    padding: '3px 0'
+    padding: '3px 0',
   },
   sliderLabel: {
     width: '64px',
     fontSize: '12px',
-    color: '#9ca3af',
-    textTransform: 'capitalize'
+    color: COLORS.creamDim,
+    textTransform: 'capitalize',
+    fontFamily: FONTS.body,
   },
-  slider: { flex: 1 },
+  slider: { flex: 1, accentColor: COLORS.gold },
+  readout: {
+    width: '38px',
+    textAlign: 'right',
+    fontSize: '11px',
+    color: COLORS.muted,
+    fontVariantNumeric: 'tabular-nums',
+  },
   voiceRow: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: '8px',
     marginTop: '8px',
-    fontSize: '13px'
+    fontSize: '13px',
   },
-  voiceBtn: {
-    background: '#222833',
-    color: '#f5f5f5',
-    border: '1px solid #39414d',
-    borderRadius: '4px',
-    padding: '2px 8px',
-    cursor: 'pointer',
-    fontSize: '11px'
-  },
+  voiceLabel: { color: COLORS.creamDim, fontSize: '12px' },
+  voiceState: { color: COLORS.goldBright },
+  voiceBtn: { fontSize: '11px', padding: '4px 9px' },
   legend: {
-    color: '#6b7280',
+    color: COLORS.muted,
     fontSize: '11px',
-    marginTop: '6px'
+    marginTop: '6px',
   },
   credit: {
     marginTop: '10px',
-    color: '#8a93a3',
+    color: COLORS.muted,
     fontSize: '11px',
-    fontStyle: 'italic'
-  }
+    fontStyle: 'italic',
+  },
 };

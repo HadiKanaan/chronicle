@@ -106,3 +106,9 @@ class RenderPayload(BaseModel):
     # the pair to gate its speaker control and the per-reply /api/voice fetch.
     voice_available: bool = False
     voice_enabled: bool = True
+    # Day 10 (relationships panel): the last few NPCs the player has spoken to,
+    # display-ready and derived entirely from existing NPC fields - no new
+    # gameplay or persistence. Each entry is {npc_id, name, occupation, sprite_id,
+    # mood, disposition, times_talked}; capped at 5, most-recent-first. Lean
+    # enough for the 200ms poll.
+    recent_contacts: list[dict] = Field(default_factory=list)

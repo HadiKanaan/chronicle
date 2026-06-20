@@ -1,0 +1,149 @@
+/* Day 10 art direction — the carved-plate frame, button states, cheap motion,
+   and the screen vignette. Imported once from main.jsx (bundled by Vite). The
+   external-asset rules that reference gitignored binaries (the @font-face pixel
+   webfonts and the optional 9-slice frame PNG) live in /ui-theme.css under
+   public/ instead, so Vite never tries to resolve those URLs at build time and
+   the build stays clean; at runtime a missing font falls back to the monospace
+   stack (font-display: block, no FOUT) and a missing frame leaves the CSS
+   border showing. Nothing here can blank or crash the screen if an asset is
+   missing. */
+
+:root {
+  --cv-ink: #0b0e12;
+  --cv-cream: #ece3cf;
+  --cv-gold: #c9a24b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  background: var(--cv-ink);
+  color: var(--cv-cream);
+  font-family: 'CV Body', 'VT323', ui-monospace, 'Courier New', monospace;
+  overflow: hidden; /* the full-bleed canvas owns the viewport */
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+
+/* Crisp pixel scaling everywhere a sprite/canvas is drawn. */
+canvas,
+img.cv-pixel {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* The carved overlay plate's optional 9-slice frame PNG lives in the public
+   stylesheet (/ui-theme.css) so its url() is never bundled; the CSS border +
+   inset shadow set inline (theme.js `plate`) give the fallback 9-slice feel. */
+
+/* Buttons: parchment-on-slate with clear hover + press states. */
+.cv-btn {
+  font-family: 'CV Body', ui-monospace, 'Courier New', monospace;
+  background: #20262f;
+  color: var(--cv-cream);
+  border: 2px solid #241c12;
+  box-shadow: inset 0 0 0 1px rgba(201, 162, 75, 0.3);
+  border-radius: 3px;
+  padding: 7px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.1s ease, transform 0.05s ease, box-shadow 0.1s ease;
+}
+.cv-btn:hover {
+  background: #2b333f;
+  box-shadow: inset 0 0 0 1px rgba(232, 198, 106, 0.55);
+}
+.cv-btn:active {
+  transform: translateY(1px);
+  background: #191e26;
+}
+.cv-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+.cv-btn-primary {
+  background: #2c2410;
+  color: #f0d9a0;
+  border-color: #6b5520;
+}
+.cv-btn-primary:hover {
+  background: #38301a;
+}
+.cv-btn-ember {
+  background: rgba(58, 26, 20, 0.85);
+  color: #e8a08a;
+  border-color: #5a2a20;
+}
+.cv-btn-ember:hover {
+  background: rgba(78, 34, 26, 0.9);
+}
+
+/* Themed thin scrollbars for scrollable plates. */
+.cv-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(201, 162, 75, 0.4) transparent;
+}
+.cv-scroll::-webkit-scrollbar {
+  width: 7px;
+}
+.cv-scroll::-webkit-scrollbar-thumb {
+  background: rgba(201, 162, 75, 0.35);
+  border-radius: 3px;
+}
+.cv-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Subtle, cheap motion only. */
+@keyframes cvFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes cvSlideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes cvSlideLeft {
+  from { opacity: 0; transform: translateX(-10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes cvSlideRight {
+  from { opacity: 0; transform: translateX(10px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes cvToastIn {
+  from { opacity: 0; transform: translateX(-14px) scale(0.98); }
+  to { opacity: 1; transform: translateX(0) scale(1); }
+}
+.cv-fade-in { animation: cvFadeIn 0.4s ease both; }
+.cv-slide-up { animation: cvSlideUp 0.32s ease both; }
+.cv-slide-left { animation: cvSlideLeft 0.32s ease both; }
+.cv-slide-right { animation: cvSlideRight 0.32s ease both; }
+.cv-toast-in { animation: cvToastIn 0.3s ease both; }
+
+/* Tasteful screen vignette: a fixed, non-interactive darkened frame so the live
+   world reads with focus toward the centre. Pure CSS, no asset. */
+.cv-vignette {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+  box-shadow: inset 0 0 200px 40px rgba(0, 0, 0, 0.55);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(0, 0, 0, 0) 55%,
+    rgba(0, 0, 0, 0.28) 100%
+  );
+}

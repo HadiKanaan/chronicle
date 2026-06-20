@@ -1,0 +1,37 @@
+/* Day 10 UI assets, kept OUT of the bundle on purpose.
+
+   This stylesheet lives in public/ and is linked directly from index.html, so
+   Vite copies it verbatim and never tries to resolve the url()s below at build
+   time — that keeps `npm run build` clean even though every file referenced
+   here is gitignored and absent from a fresh checkout. Each binary is laid down
+   by tools/setup_assets.py (copy_fonts) under /assets/ui/; when absent every
+   rule degrades gracefully:
+
+     * @font-face with font-display: block → the family stacks in theme.js fall
+       through to a system monospace with no flash of unstyled text.
+     * the .cv-plate border-image → a 404 leaves the inline CSS plate border
+       (theme.js `plate`) showing instead.
+
+   So the AA look is bundled-and-network-free when the assets are present, and a
+   crisp monospace + CSS-framed fallback when they are not. */
+
+@font-face {
+  font-family: 'CV Display';
+  src: url('/assets/ui/fonts/cv-display.woff2') format('woff2');
+  font-display: block;
+  font-weight: normal;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'CV Body';
+  src: url('/assets/ui/fonts/cv-body.woff2') format('woff2');
+  font-display: block;
+  font-weight: normal;
+  font-style: normal;
+}
+
+/* Optional carved 9-slice frame on every plate. If the PNG loads it paints a
+   real frame; a 404 simply leaves the inline CSS border in place. */
+.cv-plate {
+  border-image: url('/assets/ui/frame.png') 6 fill repeat;
+}

@@ -21,12 +21,14 @@ import {
 
 const SCALE = 2;
 const DISPLAY_TILE = SOURCE_TILE * SCALE; // 32px tiles on screen
-// Viewport measured in tiles. The camera follows the player across the (larger)
-// world, so this stays fixed regardless of region size.
-const VIEW_COLS = 25;
-const VIEW_ROWS = 19;
-const CANVAS_W = VIEW_COLS * DISPLAY_TILE;
-const CANVAS_H = VIEW_ROWS * DISPLAY_TILE;
+// Day 10: the viewport is no longer a fixed tile grid — the canvas fills the
+// window and the visible tile span is derived from its CSS size / DISPLAY_TILE,
+// recomputed on resize. Fallback span used only before the first measurement.
+const FALLBACK_COLS = 25;
+const FALLBACK_ROWS = 19;
+// Cap the backing-store density so a 4K/Retina display stays sharp without
+// allocating an enormous canvas. dpr drives sharpness, not world size.
+const MAX_DPR = 2;
 
 // Per-entity glide durations. The player glides one tile per accepted step;
 // simulated NPCs step one tile/second on the backend, so a ~1s glide makes a
@@ -96,8 +98,10 @@ function isMoving(pos, now) {
   return Boolean(pos && now - pos.t0 < pos.dur && (pos.fromX !== pos.toX || pos.fromY !== pos.toY));
 }
 
-// Deterministic rain streaks, precomputed once so the storm/rain overlay never
-// flickers frame-to-frame (no Math.random in the draw loop).
+// Deterministic rain streaks in NORMALISED [0,1) space, precomputed once so the
+// storm/rain overlay never flickers frame-to-frame (no Math.random in the draw
+// loop). Scaled to the current canvas size at draw time so they fill any
+// viewport without recomputing on resize.
 function makeStreaks(count) {
   let seed = 0x1a2b3c;
   const rnd = () => {
@@ -107,8 +111,8 @@ function makeStreaks(count) {
   const streaks = [];
   for (let i = 0; i < count; i += 1) {
     streaks.push({
-      x: rnd() * CANVAS_W,
-      y: rnd() * CANVAS_H,
+      x: rnd(),
+      y: rnd(),
       len: 9 + rnd() * 13,
       speed: 240 + rnd() * 220,
       drift: 0.22 + rnd() * 0.16,
@@ -116,7 +120,7 @@ function makeStreaks(count) {
   }
   return streaks;
 }
-const RAIN_STREAKS = makeStreaks(150);
+const RAIN_STREAKS = makeStreaks(220);
 
 // Decoration on-screen size, in tiles tall, with width derived from each
 // (trimmed) sprite's own aspect so nothing is squashed. Trees stand well above
@@ -132,7 +136,10 @@ export default function GameCanvas({ gameState, onNpcClick }) {
   const gameStateRef = useRef(gameState);
   const tileMapRef = useRef(new Map()); // "x,y" -> tile_type
   const fogMapRef = useRef(new Map()); // "x,y" -> fog_tier
-  const dimsRef = useRef({ cols: VIEW_COLS, rows: VIEW_ROWS });
+  const dimsRef = useRef({ cols: FALLBACK_COLS, rows: FALLBACK_ROWS });
+  // Day 10: live viewport metrics (CSS pixels + device pixel ratio), refreshed
+  // by the ResizeObserver and read each animation frame.
+  const viewRef = useRef({ w: FALLBACK_COLS * DISPLAY_TILE, h: FALLBACK_ROWS * DISPLAY_TILE, dpr: 1 });
   // Per-character interpolation: id -> {fromX,fromY,toX,toY,t0,x,y,dur,isPlayer}.
   const posRef = useRef(new Map());
   // Optimistic player tile: where we've told the player they are, ahead of the
@@ -173,6 +180,39 @@ export default function GameCanvas({ gameState, onNpcClick }) {
     };
   }, []);
 
+  // Day 10: size the canvas backing store to its on-screen box * devicePixelRatio
+  // so the world fills the window and stays crisp on high-DPI displays. Coalesced
+  // through requestAnimationFrame so a burst of resize events does at most one
+  // re-measure per frame (cheap debounce).
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    let raf = 0;
+    const apply = () => {
+      raf = 0;
+      const cssW = Math.max(1, Math.floor(canvas.clientWidth));
+      const cssH = Math.max(1, Math.floor(canvas.clientHeight));
+      const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+      const bw = Math.round(cssW * dpr);
+      const bh = Math.round(cssH * dpr);
+      if (canvas.width !== bw) canvas.width = bw;
+      if (canvas.height !== bh) canvas.height = bh;
+      viewRef.current = { w: cssW, h: cssH, dpr };
+    };
+    const schedule = () => {
+      if (!raf) raf = requestAnimationFrame(apply);
+    };
+    apply();
+    const observer = new ResizeObserver(schedule);
+    observer.observe(canvas);
+    window.addEventListener('resize', schedule);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      observer.disconnect();
+      window.removeEventListener('resize', schedule);
+    };
+  }, []);
+
   // On each poll: refresh derived lookups and retarget every character's glide.
   // NPCs ease toward their new authoritative tile; the player keeps its
   // optimistic target unless the backend has caught up or the player went idle.
@@ -191,7 +231,7 @@ export default function GameCanvas({ gameState, onNpcClick }) {
       if (tile.y + 1 > rows) rows = tile.y + 1;
     }
     tileMapRef.current = tileMap;
-    dimsRef.current = { cols: cols || VIEW_COLS, rows: rows || VIEW_ROWS };
+    dimsRef.current = { cols: cols || FALLBACK_COLS, rows: rows || FALLBACK_ROWS };
     const fogMap = new Map();
     for (const cell of gameState.fog_map ?? []) {
       fogMap.set(`${cell.x},${cell.y}`, cell.fog_tier);
@@ -247,8 +287,6 @@ export default function GameCanvas({ gameState, onNpcClick }) {
     if (!canvas) return undefined;
     const ctx = canvas.getContext('2d');
     if (!ctx) return undefined;
-    if (canvas.width !== CANVAS_W) canvas.width = CANVAS_W;
-    if (canvas.height !== CANVAS_H) canvas.height = CANVAS_H;
 
     let running = true;
     const frame = (now) => {
@@ -260,9 +298,13 @@ export default function GameCanvas({ gameState, onNpcClick }) {
         entry.x = entry.fromX + (entry.toX - entry.fromX) * t;
         entry.y = entry.fromY + (entry.toY - entry.fromY) * t;
       }
+      const view = viewRef.current;
+      // Draw in CSS-pixel coordinates; the dpr transform makes the backing store
+      // crisp on high-DPI without any other code caring about device pixels.
+      ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
       drawScene(
         ctx, imagesRef.current, gameStateRef.current, positions,
-        tileMapRef.current, fogMapRef.current, dimsRef.current, now,
+        tileMapRef.current, fogMapRef.current, dimsRef.current, now, view.w, view.h,
       );
       requestAnimationFrame(frame);
     };
@@ -338,15 +380,16 @@ export default function GameCanvas({ gameState, onNpcClick }) {
     if (tiles.length === 0) return;
 
     const { cols, rows } = dimsRef.current;
+    const view = viewRef.current;
     const focus = gs.player ?? { x: cols / 2, y: rows / 2 };
-    const camX = cameraOrigin((focus.x + 0.5) * DISPLAY_TILE, cols * DISPLAY_TILE, CANVAS_W);
-    const camY = cameraOrigin((focus.y + 0.5) * DISPLAY_TILE, rows * DISPLAY_TILE, CANVAS_H);
+    const camX = cameraOrigin((focus.x + 0.5) * DISPLAY_TILE, cols * DISPLAY_TILE, view.w);
+    const camY = cameraOrigin((focus.y + 0.5) * DISPLAY_TILE, rows * DISPLAY_TILE, view.h);
 
-    // Map the displayed (CSS-scaled) click back into world tile coordinates.
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const worldX = ((event.clientX - rect.left) * scaleX + camX) / DISPLAY_TILE;
-    const worldY = ((event.clientY - rect.top) * scaleY + camY) / DISPLAY_TILE;
+    // Map the displayed (CSS) click into world tile coordinates. The canvas is
+    // drawn in CSS pixels (dpr handled by the context transform), so the CSS box
+    // maps 1:1 to the drawing coordinate space.
+    const worldX = ((event.clientX - rect.left) + camX) / DISPLAY_TILE;
+    const worldY = ((event.clientY - rect.top) + camY) / DISPLAY_TILE;
 
     let nearest = null;
     let nearestDist = Infinity;
@@ -381,16 +424,16 @@ function cameraOrigin(focusPx, worldPx, viewPx) {
   return Math.max(0, Math.min(focusPx - viewPx / 2, worldPx - viewPx));
 }
 
-function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now) {
+function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now, viewW, viewH) {
   ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = '#10131a';
-  ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  ctx.fillStyle = '#0b0e12';
+  ctx.fillRect(0, 0, viewW, viewH);
 
   if ((gameState.tiles ?? []).length === 0) {
-    ctx.fillStyle = '#f5f5f5';
-    ctx.font = '20px sans-serif';
+    ctx.fillStyle = '#ece3cf';
+    ctx.font = '20px monospace';
     ctx.textAlign = 'center';
-    ctx.fillText('World not generated', CANVAS_W / 2, CANVAS_H / 2);
+    ctx.fillText('World not generated', viewW / 2, viewH / 2);
     return;
   }
 
@@ -403,13 +446,17 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
   const playerId = gameState.player?.npc_id;
   const playerPos = playerId !== undefined ? positions.get(playerId) : undefined;
   const focus = playerPos ?? gameState.player ?? { x: cols / 2, y: rows / 2 };
-  const camX = cameraOrigin((focus.x + 0.5) * DISPLAY_TILE, worldW, CANVAS_W);
-  const camY = cameraOrigin((focus.y + 0.5) * DISPLAY_TILE, worldH, CANVAS_H);
+  const camX = cameraOrigin((focus.x + 0.5) * DISPLAY_TILE, worldW, viewW);
+  const camY = cameraOrigin((focus.y + 0.5) * DISPLAY_TILE, worldH, viewH);
 
+  // Visible tile span derived from the live viewport size. Only these tiles are
+  // drawn, so a 64x64 world stays cheap at any window size.
+  const spanCols = Math.ceil(viewW / DISPLAY_TILE) + 1;
+  const spanRows = Math.ceil(viewH / DISPLAY_TILE) + 1;
   const startCol = Math.max(0, Math.floor(camX / DISPLAY_TILE));
   const startRow = Math.max(0, Math.floor(camY / DISPLAY_TILE));
-  const endCol = Math.min(cols - 1, startCol + VIEW_COLS);
-  const endRow = Math.min(rows - 1, startRow + VIEW_ROWS);
+  const endCol = Math.min(cols - 1, startCol + spanCols);
+  const endRow = Math.min(rows - 1, startRow + spanRows);
 
   // Terrain. Water tiles get a slow shimmer cycle layered on the sprite.
   for (let ty = startRow; ty <= endRow; ty += 1) {
@@ -548,9 +595,9 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
   const tint = DAY_NIGHT_TINT[gameState.time_of_day];
   if (tint) {
     ctx.fillStyle = tint;
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.fillRect(0, 0, viewW, viewH);
   }
-  drawWeather(ctx, gameState.weather, now);
+  drawWeather(ctx, gameState.weather, now, viewW, viewH);
 }
 
 function drawTile(ctx, images, type, screenX, screenY) {
@@ -685,13 +732,14 @@ function drawCharacter(ctx, images, character, worldX, worldY, camX, camY, now, 
 
 // Cheap canvas weather, layered over the day/night tint. No assets: rain and
 // storm are animated streaks; fog is a drifting grey wash; storm also darkens
-// the scene and adds a few bright flecks. 'clear' draws nothing.
-function drawWeather(ctx, weather, now) {
+// the scene and adds a few bright flecks. 'clear' draws nothing. Streaks live in
+// normalised space and are scaled to the live viewport here.
+function drawWeather(ctx, weather, now, viewW, viewH) {
   if (weather === 'rain' || weather === 'storm') {
     const storm = weather === 'storm';
     if (storm) {
       ctx.fillStyle = 'rgba(12, 16, 30, 0.34)';
-      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+      ctx.fillRect(0, 0, viewW, viewH);
     }
     ctx.strokeStyle = storm ? 'rgba(176, 196, 222, 0.55)' : 'rgba(168, 192, 214, 0.40)';
     ctx.lineWidth = 1;
@@ -699,8 +747,8 @@ function drawWeather(ctx, weather, now) {
     const t = now / 1000;
     for (const streak of RAIN_STREAKS) {
       const speed = storm ? streak.speed * 1.5 : streak.speed;
-      const y = (streak.y + t * speed) % CANVAS_H;
-      const x = (streak.x + t * speed * streak.drift) % CANVAS_W;
+      const y = (streak.y * viewH + t * speed) % viewH;
+      const x = (streak.x * viewW + t * speed * streak.drift) % viewW;
       ctx.moveTo(x, y);
       ctx.lineTo(x - streak.len * streak.drift, y + streak.len);
     }
@@ -710,8 +758,8 @@ function drawWeather(ctx, weather, now) {
       ctx.fillStyle = 'rgba(210, 220, 235, 0.5)';
       for (let i = 0; i < RAIN_STREAKS.length; i += 6) {
         const s = RAIN_STREAKS[i];
-        const y = (s.y * 1.7 + t * s.speed * 1.8) % CANVAS_H;
-        const x = (s.x * 1.3 + t * s.speed) % CANVAS_W;
+        const y = (s.y * 1.7 * viewH + t * s.speed * 1.8) % viewH;
+        const x = (s.x * 1.3 * viewW + t * s.speed) % viewW;
         ctx.fillRect(x, y, 2, 2);
       }
     }
@@ -721,23 +769,19 @@ function drawWeather(ctx, weather, now) {
     // A pale wash plus two slowly drifting bands for a soft rolling-fog feel.
     const drift = (Math.sin(now / 4000) + 1) * 0.5;
     ctx.fillStyle = 'rgba(204, 209, 217, 0.16)';
-    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    ctx.fillRect(0, 0, viewW, viewH);
     ctx.fillStyle = 'rgba(214, 219, 226, 0.12)';
-    ctx.fillRect(0, CANVAS_H * (0.15 + drift * 0.1), CANVAS_W, CANVAS_H * 0.3);
-    ctx.fillRect(0, CANVAS_H * (0.55 - drift * 0.1), CANVAS_W, CANVAS_H * 0.3);
+    ctx.fillRect(0, viewH * (0.15 + drift * 0.1), viewW, viewH * 0.3);
+    ctx.fillRect(0, viewH * (0.55 - drift * 0.1), viewW, viewH * 0.3);
   }
 }
 
 const styles = {
   canvas: {
-    width: 'auto',
-    height: 'auto',
-    maxWidth: '100%',
-    maxHeight: '88vh',
-    border: '1px solid #2c313a',
-    background: '#10131a',
     display: 'block',
-    margin: '0 auto',
+    width: '100%',
+    height: '100%',
+    background: '#0b0e12',
     imageRendering: 'pixelated',
   },
 };

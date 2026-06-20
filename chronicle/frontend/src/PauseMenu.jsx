@@ -1,26 +1,40 @@
 import { useState, useEffect } from 'react';
 import { generateWorld } from './api';
 import { audioManager } from './audio';
+import AudioPanel from './AudioPanel';
+import DebugPanel from './DebugPanel';
+import { COLORS, FONTS, plate } from './theme';
 
-// Full pause menu (Esc). Opening it freezes the world clock; Resume / Esc
-// release it. Besides resuming it offers a guarded world regeneration and a
-// controls + how-to-play reference. Backend stays authoritative throughout -
-// this only sends intents (pause, regenerate) and reads payload state.
+// Day 10 pause menu (Part C). Opening it freezes the world clock; Resume / Esc
+// release it. All settings now live here as themed tabs — Sound (master mute +
+// volume + the per-channel AudioPanel), Debug (the DebugPanel), How to Play
+// (controls + blurb), and a guarded Regenerate. Backend stays authoritative
+// throughout: this only sends intents (pause, regenerate, debug) and reads
+// payload state.
 const CONTROLS = [
   ['Arrow keys', 'Walk around the town'],
   ['Click a villager', 'Talk to them (they remember you)'],
   ['M', 'Continent map overlay'],
   ['R', 'Toggle fog of war'],
+  ['B', 'Reveal building interiors'],
   ['P', 'Pause / resume time'],
   ['Esc', 'Open / close this menu'],
 ];
 
-export default function PauseMenu({ open, onResume }) {
+const TABS = [
+  ['sound', 'Sound'],
+  ['debug', 'Debug'],
+  ['howto', 'How to Play'],
+  ['regen', 'Regenerate'],
+];
+
+export default function PauseMenu({ open, onResume, gameState }) {
+  const [tab, setTab] = useState('howto');
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   // Master sound controls mirror the AudioManager singleton. Re-sync from it
-  // each time the menu opens so the toggle reflects a mute set elsewhere (the
-  // HUD panel) while the menu was closed.
+  // each time the menu opens so the toggle reflects a mute set elsewhere while
+  // the menu was closed.
   const [muted, setMuted] = useState(audioManager.masterMuted);
   const [masterVolume, setMasterVolume] = useState(audioManager.getMasterVolume());
 
@@ -28,13 +42,13 @@ export default function PauseMenu({ open, onResume }) {
     if (open) {
       setMuted(audioManager.masterMuted);
       setMasterVolume(audioManager.getMasterVolume());
+      setConfirmRegen(false);
     }
   }, [open]);
 
   if (!open) return null;
 
   const onToggleMute = () => setMuted(audioManager.toggleMasterMute());
-
   const onMasterVolume = (event) => {
     const value = Number(event.target.value);
     audioManager.setMasterVolume(value);
@@ -50,7 +64,7 @@ export default function PauseMenu({ open, onResume }) {
     try {
       await generateWorld();
     } catch (error) {
-      // The next /api/state poll will reflect whatever the backend did.
+      // The next /api/state poll reflects whatever the backend did.
     } finally {
       setRegenerating(false);
       setConfirmRegen(false);
@@ -60,66 +74,105 @@ export default function PauseMenu({ open, onResume }) {
 
   return (
     <div style={styles.backdrop}>
-      <div style={styles.menu}>
-        <div style={styles.title}>⏸ Paused</div>
-
-        <button style={styles.primary} onClick={onResume}>▶ Resume</button>
-
-        <div style={styles.sectionLabel}>Sound</div>
-        <div style={styles.soundRow}>
-          <button
-            style={muted ? styles.muteOn : styles.muteBtn}
-            onClick={onToggleMute}
-          >
-            {muted ? '🔇 Muted' : '🔊 Mute all'}
+      <div className="cv-plate cv-slide-up cv-scroll" style={{ ...plate, ...styles.menu }}>
+        <div style={styles.titleRow}>
+          <div style={styles.title}>⏸ Paused</div>
+          <button className="cv-btn cv-btn-primary" style={styles.resume} onClick={onResume}>
+            ▶ Resume
           </button>
-          <input
-            type="range"
-            min="0"
-            max="1"
-            step="0.05"
-            value={masterVolume}
-            onChange={onMasterVolume}
-            disabled={muted}
-            aria-label="Master volume"
-            style={styles.masterSlider}
-          />
-          <span style={styles.volReadout}>{Math.round(masterVolume * 100)}%</span>
         </div>
 
-        <button
-          style={regenerating ? styles.dangerBusy : styles.danger}
-          onClick={handleRegenerate}
-          disabled={regenerating}
-        >
-          {regenerating
-            ? 'Regenerating world…'
-            : confirmRegen
-              ? '⚠ Confirm — wipes all NPCs & memories'
-              : '↻ Regenerate entire world'}
-        </button>
-        {confirmRegen && !regenerating ? (
-          <button style={styles.cancel} onClick={() => setConfirmRegen(false)}>
-            Cancel
-          </button>
-        ) : null}
-
-        <div style={styles.sectionLabel}>How to play</div>
-        <p style={styles.blurb}>
-          You inherit a villager&apos;s life in Aldenmoor, a living town. Walk
-          around and talk to people — their moods, memories, and opinions of you
-          persist, and rumors spread between them. A Demon Lord stirs beyond the
-          eastern hills; the town&apos;s factions react as the days pass.
-        </p>
-
-        <div style={styles.sectionLabel}>Controls</div>
-        <div style={styles.controls}>
-          {CONTROLS.map(([key, desc]) => (
-            <div key={key} style={styles.controlRow}>
-              <span style={styles.key}>{key}</span>
-              <span style={styles.desc}>{desc}</span>
-            </div>
+        <div style={styles.tabs}>
+          {TABS.map(([id, label]) => (
+            <button
+              key={id}
+              className="cv-btn"
+              style={{ ...styles.tab, ...(tab === id ? styles.tabActive : null) }}
+              onClick={() => setTab(id)}
+            >
+              {label}
+            </button>
           ))}
+        </div>
+
+        <div style={styles.content}>
+          {tab === 'sound' ? (
+            <>
+              <div style={styles.sectionLabel}>Master</div>
+              <div style={styles.soundRow}>
+                <button
+                  className={muted ? 'cv-btn cv-btn-ember' : 'cv-btn'}
+                  style={styles.muteBtn}
+                  onClick={onToggleMute}
+                >
+                  {muted ? '🔇 Muted' : '🔊 Mute all'}
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={masterVolume}
+                  onChange={onMasterVolume}
+                  disabled={muted}
+                  aria-label="Master volume"
+                  style={styles.masterSlider}
+                />
+                <span style={styles.volReadout}>{Math.round(masterVolume * 100)}%</span>
+              </div>
+              <div style={styles.sectionLabel}>Channels</div>
+              <AudioPanel gameState={gameState} />
+            </>
+          ) : null}
+
+          {tab === 'debug' ? <DebugPanel gameState={gameState} /> : null}
+
+          {tab === 'howto' ? (
+            <>
+              <p style={styles.blurb}>
+                You inherit a villager&apos;s life in Aldenmoor, a living town. Walk
+                around and talk to people — their moods, memories, and opinions of
+                you persist, and rumors spread between them. A Demon Lord stirs
+                beyond the eastern hills; the town&apos;s factions react as the days
+                pass.
+              </p>
+              <div style={styles.sectionLabel}>Controls</div>
+              <div style={styles.controls}>
+                {CONTROLS.map(([key, desc]) => (
+                  <div key={key} style={styles.controlRow}>
+                    <span style={styles.key}>{key}</span>
+                    <span style={styles.desc}>{desc}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
+          {tab === 'regen' ? (
+            <>
+              <p style={styles.blurb}>
+                Regenerating wipes every NPC, memory, faction, and the whole map,
+                then builds a fresh world from scratch. There is no undo.
+              </p>
+              <button
+                className={regenerating ? 'cv-btn cv-btn-ember' : 'cv-btn cv-btn-ember'}
+                style={styles.danger}
+                onClick={handleRegenerate}
+                disabled={regenerating}
+              >
+                {regenerating
+                  ? 'Regenerating world…'
+                  : confirmRegen
+                    ? '⚠ Confirm — wipes all NPCs & memories'
+                    : '↻ Regenerate entire world'}
+              </button>
+              {confirmRegen && !regenerating ? (
+                <button className="cv-btn" style={styles.cancel} onClick={() => setConfirmRegen(false)}>
+                  Cancel
+                </button>
+              ) : null}
+            </>
+          ) : null}
         </div>
 
         <div style={styles.footer}>Press Esc or Resume to return</div>
@@ -132,120 +185,82 @@ const styles = {
   backdrop: {
     position: 'fixed',
     inset: 0,
-    background: 'rgba(8, 10, 16, 0.72)',
+    background: 'rgba(6, 8, 12, 0.74)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    zIndex: 50,
+    zIndex: 60,
   },
   menu: {
-    width: '420px',
+    width: '440px',
     maxWidth: '92vw',
     maxHeight: '88vh',
     overflowY: 'auto',
-    background: '#171b22',
-    border: '1px solid #39414d',
-    borderRadius: '10px',
-    padding: '24px',
-    boxShadow: '0 16px 48px rgba(0, 0, 0, 0.55)',
-    color: '#f5f5f5',
+    padding: '20px 22px',
+  },
+  titleRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '16px',
   },
   title: {
-    fontSize: '26px',
-    color: '#8ab4f8',
-    textAlign: 'center',
-    marginBottom: '18px',
+    fontFamily: FONTS.display,
+    fontSize: '20px',
+    color: COLORS.goldBright,
+    textShadow: '0 2px 0 rgba(0,0,0,0.6)',
   },
-  primary: {
-    width: '100%',
-    background: '#1d2a40',
-    color: '#dce8ff',
-    border: '1px solid #4a76c4',
-    borderRadius: '6px',
-    padding: '10px',
-    cursor: 'pointer',
-    fontSize: '15px',
-    marginBottom: '10px',
+  resume: { fontSize: '14px' },
+  tabs: {
+    display: 'flex',
+    gap: '6px',
+    flexWrap: 'wrap',
+    marginBottom: '16px',
   },
-  danger: {
-    width: '100%',
-    background: '#2a1517',
-    color: '#f0b4b4',
-    border: '1px solid #7a3a3a',
-    borderRadius: '6px',
-    padding: '10px',
-    cursor: 'pointer',
-    fontSize: '14px',
-  },
-  dangerBusy: {
-    width: '100%',
-    background: '#2a1517',
-    color: '#a98484',
-    border: '1px solid #7a3a3a',
-    borderRadius: '6px',
-    padding: '10px',
-    fontSize: '14px',
-    cursor: 'wait',
-  },
-  cancel: {
-    width: '100%',
-    background: 'transparent',
-    color: '#9ca3af',
-    border: '1px solid #39414d',
-    borderRadius: '6px',
-    padding: '6px',
-    cursor: 'pointer',
+  tab: {
     fontSize: '12px',
-    marginTop: '6px',
+    padding: '6px 10px',
+    flex: '1 1 auto',
+  },
+  tabActive: {
+    background: '#2c2410',
+    color: COLORS.goldBright,
+    borderColor: '#6b5520',
+    boxShadow: 'inset 0 0 0 1px rgba(232, 198, 106, 0.55)',
+  },
+  content: {
+    minHeight: '180px',
   },
   sectionLabel: {
-    marginTop: '20px',
-    marginBottom: '6px',
-    fontSize: '12px',
+    marginTop: '14px',
+    marginBottom: '8px',
+    fontSize: '10px',
     textTransform: 'uppercase',
-    letterSpacing: '0.06em',
-    color: '#8a93a3',
+    letterSpacing: '0.05em',
+    color: COLORS.gold,
+    fontFamily: FONTS.display,
   },
   soundRow: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
   },
-  muteBtn: {
-    flex: '0 0 auto',
-    background: '#222833',
-    color: '#f5f5f5',
-    border: '1px solid #39414d',
-    borderRadius: '6px',
-    padding: '8px 12px',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
-  muteOn: {
-    flex: '0 0 auto',
-    background: '#3a2026',
-    color: '#e08a8a',
-    border: '1px solid #5a2a32',
-    borderRadius: '6px',
-    padding: '8px 12px',
-    cursor: 'pointer',
-    fontSize: '13px',
-  },
-  masterSlider: {
-    flex: 1,
-  },
+  muteBtn: { flex: '0 0 auto', fontSize: '13px' },
+  masterSlider: { flex: 1, accentColor: COLORS.gold },
   volReadout: {
     flex: '0 0 40px',
     textAlign: 'right',
     fontSize: '12px',
-    color: '#9ca3af',
+    color: COLORS.creamDim,
     fontVariantNumeric: 'tabular-nums',
   },
+  danger: { width: '100%', fontSize: '14px' },
+  cancel: { width: '100%', fontSize: '12px', marginTop: '6px' },
   blurb: {
     margin: 0,
     fontSize: '13px',
-    lineHeight: 1.5,
-    color: '#c4cbd5',
+    lineHeight: 1.55,
+    color: COLORS.creamDim,
   },
   controls: {
     display: 'flex',
@@ -258,19 +273,20 @@ const styles = {
     gap: '12px',
   },
   key: {
-    flex: '0 0 110px',
-    fontFamily: 'monospace',
+    flex: '0 0 116px',
+    fontFamily: FONTS.body,
     fontSize: '12px',
-    color: '#f0d9a0',
+    color: COLORS.goldBright,
   },
   desc: {
     fontSize: '13px',
-    color: '#c4cbd5',
+    color: COLORS.creamDim,
   },
   footer: {
-    marginTop: '20px',
+    marginTop: '18px',
     textAlign: 'center',
     fontSize: '11px',
-    color: '#6b7280',
+    color: COLORS.muted,
+    fontFamily: FONTS.body,
   },
 };

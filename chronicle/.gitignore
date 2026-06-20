@@ -61,6 +61,16 @@ backend/data/tts_cache/
 **/*.wav
 frontend/public/assets/audio/
 
+# Day 10 UI assets: the bundled pixel webfonts and the optional 9-slice frame
+# PNG laid down under frontend/public/assets/ui/. Treated like every other asset
+# layer - regenerable via tools/setup_assets.py (copy_fonts) and gitignored, so
+# a fresh checkout falls back to the CSS frame + monospace stack with no FOUT.
+**/*.woff
+**/*.woff2
+**/*.ttf
+**/*.otf
+frontend/public/assets/ui/
+
 # Pixel art and source art assets
 Pixel Crawler - Free Pack/
 **/*.ase

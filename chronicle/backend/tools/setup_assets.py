@@ -133,12 +133,53 @@ def copy_music() -> None:
         print(f"  {slug:22s} <- {src_name}")
 
 
+# Day 10 UI fonts. The frontend's theme.css @font-face loads these two slugs from
+# assets/ui/fonts/; theme.js stacks them ahead of a monospace fallback. Like the
+# OST, the source binaries ship at the CHRONICLE root (drop a blocky display face
+# and a crisp body face here) and are copied raw to the slug names the CSS
+# expects. Absent sources are skipped with a warning - a clone without them still
+# sets up cleanly and the UI degrades to the monospace fallback (no FOUT, no
+# crash). An optional ui/frame.png (a 9-slice plate border) is copied the same
+# way; absent, the CSS plate border shows instead.
+FONTS = {
+    "cv-display.woff2": "ui-fonts/display.woff2",
+    "cv-body.woff2": "ui-fonts/body.woff2",
+}
+UI_FRAME_SRC = os.path.join(PACK_ROOT, "ui-fonts", "frame.png")
+
+
+def copy_fonts() -> None:
+    """Lay the bundled pixel webfonts (and optional frame PNG) under assets/ui/.
+
+    Raw copy from the CHRONICLE-root sources; absent sources are skipped so this
+    never aborts the rest of the setup. The destination dir is gitignored, like
+    every other generated asset layer.
+    """
+    fonts_dst = os.path.join(ASSETS, "ui", "fonts")
+    os.makedirs(fonts_dst, exist_ok=True)
+    for slug, rel in FONTS.items():
+        src = os.path.join(PACK_ROOT, *rel.split("/"))
+        if not os.path.isfile(src):
+            print(f"  {slug:22s} -- SKIP (missing {rel})")
+            continue
+        shutil.copyfile(src, os.path.join(fonts_dst, slug))
+        print(f"  {slug:22s} <- {rel}")
+    if os.path.isfile(UI_FRAME_SRC):
+        shutil.copyfile(UI_FRAME_SRC, os.path.join(ASSETS, "ui", "frame.png"))
+        print(f"  {'frame.png':22s} <- ui-fonts/frame.png")
+    else:
+        print(f"  {'frame.png':22s} -- SKIP (CSS plate frame used instead)")
+
+
 def main() -> None:
     print(f"pack root : {PACK_ROOT}")
     print(f"assets    : {ASSETS}")
 
     print("music (Ivan Duch OST, slugged copies):")
     copy_music()
+
+    print("ui fonts (pixel webfonts + optional frame):")
+    copy_fonts()
 
     print("buildings (Fan-tasy, detailed):")
     fantasy_buildings = os.path.join(FANTASY_ART, "Buildings")

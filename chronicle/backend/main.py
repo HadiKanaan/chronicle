@@ -824,6 +824,40 @@ def _display_sprite(npc: dict[str, Any]) -> str:
     return _OCC_SPRITE.get(npc.get("occupation", ""), "human_base")
 
 
+def _build_recent_contacts(all_npcs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The last ~5 NPCs the player has spoken to, display-ready (Day 10).
+
+    Derived purely from existing NPC fields (player_conversation_count,
+    last_talked_stamp, player_sentiment) - no new gameplay or persistence. The
+    player and the Demon Lord are excluded; never-talked-to NPCs are absent.
+    Sorted most-recent-first and capped at 5, so it stays lean for the 200ms
+    poll. The disposition reuses the same sentiment_phrase the dialogue panel
+    shows, so the relationship reads consistently everywhere.
+    """
+    talked = [
+        npc
+        for npc in all_npcs
+        if int(npc.get("player_conversation_count", 0)) > 0
+        and not npc.get("is_player")
+        and not npc.get("is_demon_lord")
+    ]
+    talked.sort(key=lambda n: float(n.get("last_talked_stamp", 0.0)), reverse=True)
+    return [
+        {
+            "npc_id": npc.get("id"),
+            "name": npc.get("name", "Unknown"),
+            "occupation": npc.get("occupation", ""),
+            "sprite_id": _display_sprite(npc),
+            "mood": npc.get("current_mood", "neutral"),
+            "disposition": conversation.sentiment_phrase(
+                int(npc.get("player_sentiment", 50))
+            ),
+            "times_talked": int(npc.get("player_conversation_count", 0)),
+        }
+        for npc in talked[:5]
+    ]
+
+
 def _visible_npc_summary(npc: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": npc.get("id"),
@@ -958,6 +992,7 @@ def _build_render_payload() -> RenderPayload:
         azure_available=conversation.azure_available(),
         voice_available=voice.voice_available(),
         voice_enabled=_voice_enabled,
+        recent_contacts=_build_recent_contacts(all_npcs),
     )
 
 

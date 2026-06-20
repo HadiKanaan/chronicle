@@ -4,8 +4,12 @@ import { audioManager } from './audio';
 import GameCanvas from './GameCanvas';
 import DialogueBox from './DialogueBox';
 import HUD from './HUD';
+import Minimap from './Minimap';
+import RelationshipsPanel from './RelationshipsPanel';
 import ContinentOverlay from './ContinentOverlay';
 import PauseMenu from './PauseMenu';
+import TitleSplash from './TitleSplash';
+import { COLORS, FONTS, plate } from './theme';
 
 const EMPTY_STATE = {
   tiles: [],
@@ -23,6 +27,7 @@ const EMPTY_STATE = {
   decorations: [],
   paths: [],
   props: [],
+  recent_contacts: [],
   manually_paused: false
 };
 
@@ -41,6 +46,9 @@ export default function App() {
   // Frontend-only X-ray: ghost every building roof so the NPCs inside are
   // visible at once. Purely a render toggle (the backend never sees it).
   const [revealInteriors, setRevealInteriors] = useState(false);
+  // Day 10 title splash: shown until the player clicks "begin", which also
+  // unlocks audio. Unmounted after its fade-out settles.
+  const [splashGone, setSplashGone] = useState(false);
 
   const setPaused = (paused) => {
     sendInput({ type: 'toggle_pause', payload: { paused } }).catch(() => {});
@@ -61,9 +69,9 @@ export default function App() {
           return;
         }
         setGameState(nextState);
-        setNotifications((nextState.notifications ?? []).slice(-5));
+        setNotifications((nextState.notifications ?? []).slice(-6));
         // Audio reacts to the authoritative payload (time_of_day, weather). The
-        // manager no-ops until unlocked by the first user gesture below.
+        // manager no-ops until unlocked by the title splash below.
         audioManager.update(nextState);
       } catch (error) {
         if (!cancelled) {
@@ -83,21 +91,13 @@ export default function App() {
     };
   }, []);
 
-  // Unlock audio on the first user gesture (browsers block autoplay before
-  // one) and start the OST then. One-shot: the listeners remove themselves.
-  useEffect(() => {
-    const unlock = () => {
-      audioManager.unlock();
-      window.removeEventListener('pointerdown', unlock);
-      window.removeEventListener('keydown', unlock);
-    };
-    window.addEventListener('pointerdown', unlock);
-    window.addEventListener('keydown', unlock);
-    return () => {
-      window.removeEventListener('pointerdown', unlock);
-      window.removeEventListener('keydown', unlock);
-    };
-  }, []);
+  // Day 10: audio unlocks intentionally on the title-splash "begin" gesture
+  // (Part F), replacing the old invisible first-gesture listener. Browsers block
+  // autoplay before a gesture, so the OST starts exactly here.
+  const beginGame = () => {
+    audioManager.unlock();
+    window.setTimeout(() => setSplashGone(true), 850); // unmount after the fade
+  };
 
   const dialogueOpen = Boolean(dialogue);
 
@@ -256,122 +256,139 @@ export default function App() {
 
   return (
     <div style={styles.shell}>
-      <div style={styles.canvasPanel}>
+      {/* Full-bleed world canvas fills the viewport. */}
+      <div style={styles.canvasLayer}>
         <GameCanvas gameState={visibleState} onNpcClick={openDialogue} />
-        {gameState.manually_paused && !showPauseMenu ? (
-          <div style={styles.pauseOverlay}>
-            <div style={styles.pauseMenu}>
-              <div style={styles.pauseTitle}>⏸ Paused</div>
-              <div style={styles.pauseHint}>The world clock is held. You can still walk around.</div>
-              <button
-                style={styles.resumeBtn}
-                onClick={() => sendInput({ type: 'toggle_pause', payload: { paused: false } }).catch(() => {})}
-              >
-                ▶ Resume (P)
-              </button>
-            </div>
-          </div>
-        ) : null}
       </div>
-      <div style={styles.sidebar}>
-        <HUD gameState={visibleState} />
+
+      {/* Tasteful screen vignette (pure CSS, non-interactive). */}
+      <div className="cv-vignette" />
+
+      {/* Diegetic edge-anchored HUD plates. */}
+      <HUD gameState={visibleState} />
+
+      {/* Acquaintances plate, top-left under the world-status plate. */}
+      <div style={styles.acquaintances}>
+        <RelationshipsPanel contacts={gameState.recent_contacts} />
+      </div>
+
+      {/* Village minimap, bottom-right corner. */}
+      <div style={styles.minimapWrap}>
+        <Minimap gameState={visibleState} />
+      </div>
+
+      {/* Bottom-center controls strip. */}
+      <div style={styles.bottomCenter}>
         <button
-          style={revealInteriors ? styles.revealBtnOn : styles.revealBtn}
+          className="cv-btn"
+          style={revealInteriors ? styles.revealOn : styles.revealBtn}
           onClick={() => setRevealInteriors((on) => !on)}
         >
-          {revealInteriors ? '🏠 Hide building interiors' : '🏠 Reveal building interiors'}
+          {revealInteriors ? '🏠 Hide interiors' : '🏠 Reveal interiors'}
         </button>
-        <div style={styles.hint}>Esc menu · M map · R fog · P pause · B interiors</div>
+        <span style={styles.hint}>Esc menu · M map · R fog · P pause · B interiors</span>
       </div>
+
+      {/* Sticky manual-pause indicator (when paused outside the menu). */}
+      {gameState.manually_paused && !showPauseMenu ? (
+        <div style={styles.pauseOverlay}>
+          <div className="cv-plate cv-fade-in" style={{ ...plate, ...styles.pausePlate }}>
+            <div style={styles.pauseTitle}>⏸ Paused</div>
+            <div style={styles.pauseHint}>The world clock is held. You can still walk around.</div>
+            <button
+              className="cv-btn cv-btn-primary"
+              style={styles.resumeBtn}
+              onClick={() => sendInput({ type: 'toggle_pause', payload: { paused: false } }).catch(() => {})}
+            >
+              ▶ Resume (P)
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={closeDialogue} />
       {showContinent ? <ContinentOverlay onClose={() => setShowContinent(false)} /> : null}
-      <PauseMenu open={showPauseMenu} onResume={resumeFromPauseMenu} />
+      <PauseMenu open={showPauseMenu} onResume={resumeFromPauseMenu} gameState={visibleState} />
+      {!splashGone ? <TitleSplash onBegin={beginGame} /> : null}
     </div>
   );
 }
 
 const styles = {
   shell: {
-    display: 'grid',
-    gridTemplateColumns: 'minmax(0, 1fr) 320px',
-    gap: '16px',
-    minHeight: '100vh',
-    padding: '16px',
-    background: '#111318',
-    color: '#f5f5f5',
-    boxSizing: 'border-box'
+    position: 'fixed',
+    inset: 0,
+    background: COLORS.ink,
+    color: COLORS.cream,
+    fontFamily: FONTS.body,
+    overflow: 'hidden',
   },
-  canvasPanel: {
-    minHeight: '0',
-    position: 'relative'
+  canvasLayer: {
+    position: 'absolute',
+    inset: 0,
+  },
+  acquaintances: {
+    position: 'fixed',
+    top: '108px',
+    left: '12px',
+    zIndex: 10,
+  },
+  minimapWrap: {
+    position: 'fixed',
+    bottom: '12px',
+    right: '12px',
+    zIndex: 10,
+  },
+  bottomCenter: {
+    position: 'fixed',
+    bottom: '12px',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 10,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  revealBtn: { fontSize: '12px', padding: '6px 12px' },
+  revealOn: {
+    fontSize: '12px',
+    padding: '6px 12px',
+    background: '#2c2410',
+    color: COLORS.goldBright,
+    borderColor: '#6b5520',
+  },
+  hint: {
+    fontSize: '11px',
+    color: COLORS.creamDim,
+    background: 'rgba(11, 14, 18, 0.6)',
+    padding: '5px 10px',
+    borderRadius: '3px',
   },
   pauseOverlay: {
-    position: 'absolute',
+    position: 'fixed',
     inset: 0,
     display: 'flex',
     alignItems: 'flex-start',
     justifyContent: 'center',
-    paddingTop: '24px',
-    background: 'rgba(10, 13, 20, 0.32)',
-    pointerEvents: 'none'
+    paddingTop: '28px',
+    pointerEvents: 'none',
+    zIndex: 20,
   },
-  pauseMenu: {
+  pausePlate: {
     pointerEvents: 'auto',
-    background: 'rgba(21, 25, 33, 0.94)',
-    border: '1px solid #39414d',
-    borderRadius: '8px',
-    padding: '16px 20px',
+    padding: '14px 20px',
     textAlign: 'center',
-    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.45)'
   },
   pauseTitle: {
-    fontSize: '20px',
-    color: '#8ab4f8',
-    marginBottom: '4px'
+    fontFamily: FONTS.display,
+    fontSize: '16px',
+    color: COLORS.goldBright,
+    marginBottom: '4px',
   },
   pauseHint: {
     fontSize: '12px',
-    color: '#9ca3af',
-    marginBottom: '12px'
+    color: COLORS.creamDim,
+    marginBottom: '12px',
   },
-  resumeBtn: {
-    background: '#222833',
-    color: '#f5f5f5',
-    border: '1px solid #4a76c4',
-    borderRadius: '5px',
-    padding: '6px 16px',
-    cursor: 'pointer',
-    fontSize: '13px'
-  },
-  sidebar: {
-    minHeight: '0'
-  },
-  revealBtn: {
-    marginTop: '12px',
-    width: '100%',
-    background: '#1b2030',
-    color: '#9aa4b2',
-    border: '1px solid #39414d',
-    borderRadius: '4px',
-    padding: '8px',
-    cursor: 'pointer',
-    fontSize: '13px'
-  },
-  revealBtnOn: {
-    marginTop: '12px',
-    width: '100%',
-    background: '#12233a',
-    color: '#a8c7f0',
-    border: '1px solid #4a76c4',
-    borderRadius: '4px',
-    padding: '8px',
-    cursor: 'pointer',
-    fontSize: '13px'
-  },
-  hint: {
-    marginTop: '10px',
-    color: '#6b7280',
-    fontSize: '12px',
-    textAlign: 'center'
-  }
+  resumeBtn: { fontSize: '13px' },
 };
