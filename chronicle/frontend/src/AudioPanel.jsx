@@ -36,7 +36,7 @@ export default function AudioPanel({ gameState }) {
         </button>
       </div>
 
-      {['music', 'ambient', 'voice'].map((channel) => (
+      {['music', 'ambient', 'voice', 'sfx'].map((channel) => (
         <label key={channel} style={styles.sliderRow}>
           <span style={styles.sliderLabel}>{channel}</span>
           <input

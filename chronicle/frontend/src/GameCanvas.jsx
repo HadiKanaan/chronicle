@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { sendInput } from './api';
+import { audioManager } from './audio';
 import {
   SOURCE_TILE,
   TILE_ATLAS,
@@ -289,9 +290,13 @@ export default function GameCanvas({ gameState, onNpcClick }) {
         const ny = base.y + dy;
         const { cols, rows } = dimsRef.current;
         const inBounds = nx >= 0 && ny >= 0 && nx < cols && ny < rows;
-        if (inBounds && passableType(tileMapRef.current.get(`${nx},${ny}`))) {
+        const destType = tileMapRef.current.get(`${nx},${ny}`);
+        if (inBounds && passableType(destType)) {
           predictRef.current = { x: nx, y: ny };
           lastMoveAtRef.current = performance.now();
+          // Footstep on each accepted optimistic step (tile-flavored, rate-limited
+          // in the manager so OS key-repeat can't spam it).
+          audioManager.playFootstep(destType);
           const id = player.npc_id;
           const e = posRef.current.get(id);
           const fromX = e ? e.x : base.x;

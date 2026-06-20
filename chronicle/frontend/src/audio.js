@@ -26,12 +26,21 @@ const PEACEFUL = ['small-town-feeling', 'emonds-field', 'elven-town', 'eldemmors
 const OMINOUS = ['old-nights', 'tuathaan'];
 
 // Low default channel volumes — the OST sits under the simulation, never over it.
-const DEFAULT_VOLUMES = { music: 0.25, ambient: 0.5, voice: 1.0 };
+const DEFAULT_VOLUMES = { music: 0.25, ambient: 0.5, voice: 1.0, sfx: 0.5 };
 
 const MUSIC_FADE_MS = 2200;
 const AMBIENT_FADE_MS = 1500;
 const THUNDER_MIN_MS = 9000;
 const THUNDER_MAX_MS = 22000;
+
+// Footsteps: one clip, replayed per accepted player step. Rate-limited so a held
+// arrow key (OS key-repeat) can't machine-gun it, with per-step pitch jitter so
+// repeated steps don't sound mechanical. The clip the user dropped lives in the
+// ambient folder; a missing file no-ops like every other layer.
+const FOOTSTEP_SRC = `${BASE}/ambient/footsteps.mp3`;
+const FOOTSTEP_MIN_MS = 200;
+// Tile-flavored gain: crisper on hard ground, softer on grass/dirt.
+const HARD_TILES = new Set(['stone_path', 'building_floor', 'building_wall']);
 
 function shuffle(list) {
   const out = list.slice();
@@ -82,6 +91,11 @@ export class AudioManager {
     // Voice channel: the currently-playing clip (replaced on each new line).
     this.voiceHowl = null;
 
+    // Footstep SFX: a single preloaded Howl played with overlapping ids.
+    this.footstepHowl = null;
+    this.footstepReady = false;
+    this.lastFootstepAt = 0;
+
     // Last payload signals, so unlock() can start with the correct register and
     // update() can diff against the previous poll.
     this.lastTimeOfDay = 'dawn';
@@ -95,6 +109,7 @@ export class AudioManager {
     this.unlocked = true;
     Howler.volume(this.masterVolume); // honor a master volume set before unlock
     Howler.mute(this.masterMuted);
+    this._ensureFootsteps(); // preload so the first step isn't silent
     this._startMusicPool(isNight(this.lastTimeOfDay));
     this._syncAmbient(this.lastWeather, this.lastTimeOfDay);
   }
@@ -150,6 +165,7 @@ export class AudioManager {
       if (this.thunderHowl) this.thunderHowl.volume(Math.min(1, vol + 0.2));
     }
     if (channel === 'voice' && this.voiceHowl) this.voiceHowl.volume(vol);
+    if (channel === 'sfx' && this.footstepHowl) this.footstepHowl.volume(vol);
   }
 
   getVolume(channel) {
@@ -262,6 +278,33 @@ export class AudioManager {
       window.clearTimeout(this.thunderTimer);
       this.thunderTimer = null;
     }
+  }
+
+  // --- footsteps ----------------------------------------------------------
+  _ensureFootsteps() {
+    if (this.footstepHowl) return;
+    this.footstepHowl = new Howl({
+      src: [FOOTSTEP_SRC],
+      volume: this.volumes.sfx,
+      onload: () => { this.footstepReady = true; },
+      onloaderror: () => { this.footstepReady = false; } // missing clip -> no-op
+    });
+  }
+
+  // Play one footstep for an accepted player step on the given tile type.
+  // Rate-limited and overlap-friendly (one Howl, many play ids); silent until
+  // unlocked and until the clip has loaded.
+  playFootstep(tileType) {
+    if (!this.unlocked) return;
+    this._ensureFootsteps();
+    if (!this.footstepReady) return;
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - this.lastFootstepAt < FOOTSTEP_MIN_MS) return;
+    this.lastFootstepAt = now;
+    const id = this.footstepHowl.play();
+    const gain = HARD_TILES.has(tileType) ? 1.0 : 0.72;
+    this.footstepHowl.volume(this.volumes.sfx * gain, id);
+    this.footstepHowl.rate(0.92 + Math.random() * 0.16, id); // subtle pitch jitter
   }
 
   // --- voice --------------------------------------------------------------
