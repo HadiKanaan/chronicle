@@ -26,9 +26,13 @@ const DISPLAY_TILE = SOURCE_TILE * SCALE; // 32px tiles on screen
 // recomputed on resize. Fallback span used only before the first measurement.
 const FALLBACK_COLS = 25;
 const FALLBACK_ROWS = 19;
-// Cap the backing-store density so a 4K/Retina display stays sharp without
-// allocating an enormous canvas. dpr drives sharpness, not world size.
-const MAX_DPR = 2;
+// Render at CSS-pixel resolution (device-pixel-ratio 1). The world is pixel art
+// drawn at integer tile scale with image-rendering: pixelated, so a higher dpr
+// adds almost no visible sharpness but multiplies the pixels drawn AND captured
+// every frame - the main cost that made movement jank while screen-sharing a
+// full-screen canvas. Capping to 1 cuts that load a lot (e.g. ~4x fewer pixels on
+// a 2x display) with no meaningful visual loss, and Meet downsamples anyway.
+const MAX_DPR = 1;
 
 // Per-entity glide durations. The player glides one tile per accepted step;
 // simulated NPCs step one tile/second on the backend, so a ~1s glide makes a
