@@ -49,10 +49,32 @@ export default function App() {
   // Day 10 title splash: shown until the player clicks "begin", which also
   // unlocks audio. Unmounted after its fade-out settles.
   const [splashGone, setSplashGone] = useState(false);
+  // Fullscreen toggle (F / button). Tracked from the browser's fullscreenchange
+  // event so the control label stays correct even when the user exits with the
+  // OS shortcut (Esc / F11) instead of our control.
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const setPaused = (paused) => {
     sendInput({ type: 'toggle_pause', payload: { paused } }).catch(() => {});
   };
+
+  // Request/exit fullscreen on the whole document so the canvas fills the
+  // physical screen (GameCanvas's ResizeObserver re-fits the world to the new
+  // size). Best-effort: the promise rejects if the browser blocks it, which we
+  // ignore so a denied request can never throw.
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
 
   const resumeFromPauseMenu = () => {
     setShowPauseMenu(false);
@@ -131,6 +153,9 @@ export default function App() {
       } else if (event.key === 'b' || event.key === 'B') {
         event.preventDefault();
         setRevealInteriors((on) => !on);
+      } else if (event.key === 'f' || event.key === 'F') {
+        event.preventDefault();
+        toggleFullscreen();
       } else if (event.key === 'Escape') {
         event.preventDefault();
         // Esc closes the continent map first if it's up; otherwise it toggles
@@ -286,7 +311,14 @@ export default function App() {
         >
           {revealInteriors ? '🏠 Hide interiors' : '🏠 Reveal interiors'}
         </button>
-        <span style={styles.hint}>Esc menu · M map · R fog · P pause · B interiors</span>
+        <button
+          className="cv-btn"
+          style={isFullscreen ? styles.revealOn : styles.revealBtn}
+          onClick={toggleFullscreen}
+        >
+          {isFullscreen ? '⛶ Exit fullscreen' : '⛶ Fullscreen'}
+        </button>
+        <span style={styles.hint}>Esc menu · M map · R fog · P pause · B interiors · F fullscreen</span>
       </div>
 
       {/* Sticky manual-pause indicator (when paused outside the menu). */}

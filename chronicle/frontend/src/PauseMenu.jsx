@@ -17,6 +17,7 @@ const CONTROLS = [
   ['M', 'Continent map overlay'],
   ['R', 'Toggle fog of war'],
   ['B', 'Reveal building interiors'],
+  ['F', 'Toggle fullscreen'],
   ['P', 'Pause / resume time'],
   ['Esc', 'Open / close this menu'],
 ];
