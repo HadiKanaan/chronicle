@@ -43,8 +43,16 @@ const NPC_LERP_MS = 950;
 // rate either. Matched to PLAYER_LERP_MS for gap-free motion. ~20 tiles/s.
 const MOVE_COOLDOWN_MS = 50;
 // After the player stops driving, reconcile the predicted position back to the
-// backend's authoritative tile (covers any dropped move intent).
-const RECONCILE_IDLE_MS = 400;
+// backend's authoritative tile (covers any dropped move intent). This window must
+// be LONGER than the worst-case move round-trip, or it snaps the player back
+// before an in-flight (merely slow) move has landed - which is exactly what
+// happened while sharing audio: main-thread jank pushed round-trips past the old
+// 400ms, so good moves got yanked back and then re-applied (the confusing
+// "some register, some teleport back"). The backend's _player_move_lock means
+// moves are essentially never truly dropped, so erring long is safe: a genuine
+// drop just takes a beat longer to correct, while latency spikes no longer cause
+// false snap-backs.
+const RECONCILE_IDLE_MS = 1500;
 
 const MOVE_DELTAS = {
   up: [0, -1],
