@@ -63,6 +63,9 @@ export class AudioManager {
   constructor() {
     this.unlocked = false;
     this.masterMuted = false;
+    // Master gain across every channel (Howler global volume), independent of
+    // the per-channel music/ambient/voice volumes that multiply under it.
+    this.masterVolume = 1.0;
     this.volumes = { ...DEFAULT_VOLUMES };
 
     // Music state.
@@ -90,6 +93,7 @@ export class AudioManager {
   unlock() {
     if (this.unlocked) return;
     this.unlocked = true;
+    Howler.volume(this.masterVolume); // honor a master volume set before unlock
     Howler.mute(this.masterMuted);
     this._startMusicPool(isNight(this.lastTimeOfDay));
     this._syncAmbient(this.lastWeather, this.lastTimeOfDay);
@@ -122,6 +126,19 @@ export class AudioManager {
   toggleMasterMute() {
     this.setMasterMute(!this.masterMuted);
     return this.masterMuted;
+  }
+
+  // Master volume: a single global gain over every channel (Howler.volume),
+  // separate from mute and from the per-channel sliders. Works before unlock —
+  // unlock() re-applies it when audio starts.
+  setMasterVolume(value) {
+    const vol = Math.max(0, Math.min(1, value));
+    this.masterVolume = vol;
+    Howler.volume(vol);
+  }
+
+  getMasterVolume() {
+    return this.masterVolume;
   }
 
   setVolume(channel, value) {

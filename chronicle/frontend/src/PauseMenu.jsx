@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { generateWorld } from './api';
+import { audioManager } from './audio';
 
 // Full pause menu (Esc). Opening it freezes the world clock; Resume / Esc
 // release it. Besides resuming it offers a guarded world regeneration and a
@@ -17,8 +18,28 @@ const CONTROLS = [
 export default function PauseMenu({ open, onResume }) {
   const [confirmRegen, setConfirmRegen] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  // Master sound controls mirror the AudioManager singleton. Re-sync from it
+  // each time the menu opens so the toggle reflects a mute set elsewhere (the
+  // HUD panel) while the menu was closed.
+  const [muted, setMuted] = useState(audioManager.masterMuted);
+  const [masterVolume, setMasterVolume] = useState(audioManager.getMasterVolume());
+
+  useEffect(() => {
+    if (open) {
+      setMuted(audioManager.masterMuted);
+      setMasterVolume(audioManager.getMasterVolume());
+    }
+  }, [open]);
 
   if (!open) return null;
+
+  const onToggleMute = () => setMuted(audioManager.toggleMasterMute());
+
+  const onMasterVolume = (event) => {
+    const value = Number(event.target.value);
+    audioManager.setMasterVolume(value);
+    setMasterVolume(value);
+  };
 
   const handleRegenerate = async () => {
     if (!confirmRegen) {
@@ -43,6 +64,28 @@ export default function PauseMenu({ open, onResume }) {
         <div style={styles.title}>⏸ Paused</div>
 
         <button style={styles.primary} onClick={onResume}>▶ Resume</button>
+
+        <div style={styles.sectionLabel}>Sound</div>
+        <div style={styles.soundRow}>
+          <button
+            style={muted ? styles.muteOn : styles.muteBtn}
+            onClick={onToggleMute}
+          >
+            {muted ? '🔇 Muted' : '🔊 Mute all'}
+          </button>
+          <input
+            type="range"
+            min="0"
+            max="1"
+            step="0.05"
+            value={masterVolume}
+            onChange={onMasterVolume}
+            disabled={muted}
+            aria-label="Master volume"
+            style={styles.masterSlider}
+          />
+          <span style={styles.volReadout}>{Math.round(masterVolume * 100)}%</span>
+        </div>
 
         <button
           style={regenerating ? styles.dangerBusy : styles.danger}
@@ -162,6 +205,41 @@ const styles = {
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
     color: '#8a93a3',
+  },
+  soundRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+  },
+  muteBtn: {
+    flex: '0 0 auto',
+    background: '#222833',
+    color: '#f5f5f5',
+    border: '1px solid #39414d',
+    borderRadius: '6px',
+    padding: '8px 12px',
+    cursor: 'pointer',
+    fontSize: '13px',
+  },
+  muteOn: {
+    flex: '0 0 auto',
+    background: '#3a2026',
+    color: '#e08a8a',
+    border: '1px solid #5a2a32',
+    borderRadius: '6px',
+    padding: '8px 12px',
+    cursor: 'pointer',
+    fontSize: '13px',
+  },
+  masterSlider: {
+    flex: 1,
+  },
+  volReadout: {
+    flex: '0 0 40px',
+    textAlign: 'right',
+    fontSize: '12px',
+    color: '#9ca3af',
+    fontVariantNumeric: 'tabular-nums',
   },
   blurb: {
     margin: 0,
