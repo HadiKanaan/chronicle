@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { getState, getConversationContext, sendConversation, sendInput } from './api';
+import { getState, getConversationContext, sendConversation, sendInput, sendVoice } from './api';
+import { audioManager } from './audio';
 import GameCanvas from './GameCanvas';
 import DialogueBox from './DialogueBox';
 import HUD from './HUD';
@@ -61,6 +62,9 @@ export default function App() {
         }
         setGameState(nextState);
         setNotifications((nextState.notifications ?? []).slice(-5));
+        // Audio reacts to the authoritative payload (time_of_day, weather). The
+        // manager no-ops until unlocked by the first user gesture below.
+        audioManager.update(nextState);
       } catch (error) {
         if (!cancelled) {
           setGameState(EMPTY_STATE);
@@ -76,6 +80,22 @@ export default function App() {
     return () => {
       cancelled = true;
       window.clearInterval(intervalId);
+    };
+  }, []);
+
+  // Unlock audio on the first user gesture (browsers block autoplay before
+  // one) and start the OST then. One-shot: the listeners remove themselves.
+  useEffect(() => {
+    const unlock = () => {
+      audioManager.unlock();
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
+    };
+    window.addEventListener('pointerdown', unlock);
+    window.addEventListener('keydown', unlock);
+    return () => {
+      window.removeEventListener('pointerdown', unlock);
+      window.removeEventListener('keydown', unlock);
     };
   }, []);
 
@@ -198,6 +218,17 @@ export default function App() {
             }
           : current
       );
+      // Decoupled voice pass: the reply text is already on screen; fetch the TTS
+      // clip and play it a beat later. Fully best-effort — sendVoice never
+      // throws, and {voiced:false} (no creds / disabled / outage) just stays
+      // silent. Only voice the reply if this NPC's dialogue is still open.
+      if (result.npc_response) {
+        sendVoice(npcId, result.npc_response).then((voiceResult) => {
+          if (voiceResult?.voiced && dialogue?.npcId === npcId) {
+            audioManager.playVoiceBase64(voiceResult.audio_b64);
+          }
+        });
+      }
     } catch (error) {
       setDialogue((current) =>
         current && current.npcId === npcId

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import random
 import threading
@@ -61,6 +62,7 @@ from systems import (
     relationships,
     rumors,
     tiers,
+    voice,
     weather,
     world_gen,
 )
@@ -110,6 +112,11 @@ def _name_pools() -> dict[str, Any]:
 FOG_REVEAL_RADIUS = 11.0
 # Debug demo toggle (press 'R'): reveal the whole map regardless of exploration.
 _reveal_all = False
+# Day 9: process-global NPC-voice toggle (mirrors _manual_pause - a plain bool,
+# no lock needed; only ever read or flipped wholesale). When off, /api/voice
+# short-circuits to {"voiced": false} even if Azure Speech is configured, so a
+# presenter can silence townsfolk without unsetting creds.
+_voice_enabled = True
 # Manual pause (press 'P' / pause button): a sticky hold on the world clock,
 # independent of the rolling dialogue/decision freeze. Stays set until toggled
 # off, so a presenter can stop time, talk through the scene, then resume. The
@@ -932,6 +939,8 @@ def _build_render_payload() -> RenderPayload:
         llm_provider=conversation.current_provider(),
         llm_last_seconds=conversation.last_call_seconds(),
         azure_available=conversation.azure_available(),
+        voice_available=voice.voice_available(),
+        voice_enabled=_voice_enabled,
     )
 
 
@@ -985,6 +994,20 @@ def post_input(player_input: PlayerInput) -> JSONResponse:
         return JSONResponse({
             "status": "ok", "accepted": True,
             "provider": provider, "azure_available": conversation.azure_available(),
+        })
+
+    # Day 9 audio: flip the process-global NPC-voice toggle. A truthy/falsey
+    # `enabled` in the payload forces a state; otherwise it toggles. Mirrors
+    # toggle_pause - a plain bool write, no lock needed.
+    if player_input.type == "toggle_voice":
+        global _voice_enabled
+        if "enabled" in player_input.payload:
+            _voice_enabled = bool(player_input.payload["enabled"])
+        else:
+            _voice_enabled = not _voice_enabled
+        return JSONResponse({
+            "status": "ok", "accepted": True,
+            "voice_enabled": _voice_enabled, "voice_available": voice.voice_available(),
         })
 
     log_event(1, 6, player_input.type, f"Input received: {player_input.type}")
@@ -1238,6 +1261,48 @@ async def post_conversation(payload: ConversationInput) -> JSONResponse:
     # Offloaded to a thread so the multi-second LLM call never blocks the event
     # loop serving /api/state polls; the frontend awaits with a thinking state.
     result = await asyncio.to_thread(_run_conversation, payload.npc_id, payload.player_text.strip())
+    return JSONResponse(result)
+
+
+class VoiceInput(BaseModel):
+    npc_id: str
+    text: str = Field(min_length=1, max_length=600)
+
+
+def _synthesize_voice(npc_id: str, text: str) -> dict[str, Any]:
+    """Day 9: synthesize one NPC line to base64 mp3 (runs on a worker thread).
+
+    Returns {"voiced": true, "audio_b64": ..., "format": "mp3"} on success, or
+    {"voiced": false} whenever voice is disabled, unavailable, the NPC is
+    unknown, or synthesis fails. NEVER raises and NEVER 500s on a TTS outage -
+    the frontend has already rendered the reply text; audio is a bonus layer.
+    The TTS_KEY stays inside systems.voice; only the resulting bytes leave here.
+    """
+    if not _voice_enabled or not voice.voice_available():
+        return {"voiced": False}
+    npc = get_npc(npc_id)
+    if npc is None:
+        return {"voiced": False}
+    try:
+        audio = voice.synthesize(text, npc)
+    except Exception as exc:  # noqa: BLE001 - defense in depth; synthesize already guards
+        logging.getLogger("chronicle.voice").warning("Voice endpoint failed: %r", exc)
+        audio = None
+    if not audio:
+        return {"voiced": False}
+    return {
+        "voiced": True,
+        "audio_b64": base64.b64encode(audio).decode("ascii"),
+        "format": "mp3",
+    }
+
+
+@app.post("/api/voice")
+async def post_voice(payload: VoiceInput) -> JSONResponse:
+    """Mediate Azure Speech TTS so the key never reaches the frontend. Offloaded
+    to a thread like /api/conversation; decoupled from the conversation endpoint
+    so the reply text renders immediately and the audio arrives a beat later."""
+    result = await asyncio.to_thread(_synthesize_voice, payload.npc_id, payload.text.strip())
     return JSONResponse(result)
 
 

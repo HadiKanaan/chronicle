@@ -4,6 +4,7 @@ scikit-learn
 numpy
 ollama
 openai
+requests
 python-dotenv
 pydantic
 pytest

@@ -1,5 +1,6 @@
 import { sendInput } from './api';
 import DebugPanel from './DebugPanel';
+import AudioPanel from './AudioPanel';
 
 function formatHour(hour) {
   const h = Number.isFinite(hour) ? ((hour % 24) + 24) % 24 : 0;
@@ -110,6 +111,8 @@ export default function HUD({ gameState }) {
           ))
         )}
       </section>
+
+      <AudioPanel gameState={gameState} />
 
       <DebugPanel gameState={gameState} />
     </aside>

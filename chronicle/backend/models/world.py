@@ -101,3 +101,8 @@ class RenderPayload(BaseModel):
     llm_provider: str = "local"
     llm_last_seconds: float = 0.0
     azure_available: bool = False
+    # Day 9 audio: whether Azure NPC voices are configured (creds present) and
+    # whether the process-global voice toggle is currently on. The frontend uses
+    # the pair to gate its speaker control and the per-reply /api/voice fetch.
+    voice_available: bool = False
+    voice_enabled: bool = True

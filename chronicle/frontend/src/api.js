@@ -60,6 +60,26 @@ export async function sendConversation(npcId, playerText) {
   return response.json();
 }
 
+// Day 9: fetch an NPC line's TTS audio AFTER the reply text has rendered. The
+// backend mediates Azure Speech so the key never reaches here; it returns
+// { voiced: true, audio_b64, format } or { voiced: false } when unavailable or
+// disabled. Never throws on a non-2xx — a voice outage is a silent non-event.
+export async function sendVoice(npcId, text) {
+  try {
+    const response = await fetch('/api/voice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ npc_id: npcId, text })
+    });
+    if (!response.ok) {
+      return { voiced: false };
+    }
+    return response.json();
+  } catch (error) {
+    return { voiced: false };
+  }
+}
+
 // Fetched exactly ONCE when the player opens the map overlay - never in the
 // 500ms state poll. The continent is generated once and cached by the backend.
 export async function getContinent() {

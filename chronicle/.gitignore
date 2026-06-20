@@ -49,6 +49,17 @@ backend/data/*.db
 backend/data/*.sqlite
 backend/data/*.sqlite3
 frontend/dist/
+# Day 9: backend-side Azure TTS disk cache (synthesized mp3s, regenerable)
+backend/data/tts_cache/
+
+# Day 9 audio assets: the OST source mp3s at the CHRONICLE root and the slugged
+# copies the setup script lays down under the public audio dir, plus any CC0
+# ambient clips the user drops in. Treated like the sprite packs - regenerable
+# from the source mp3s via tools/setup_assets.py, so they stay out of git.
+**/*.mp3
+**/*.ogg
+**/*.wav
+frontend/public/assets/audio/
 
 # Pixel art and source art assets
 Pixel Crawler - Free Pack/

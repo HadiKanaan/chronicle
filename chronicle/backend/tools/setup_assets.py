@@ -36,6 +36,22 @@ KENNEY_ENV = os.path.join(KENNEY, "Environment")
 KENNEY_SHEET = os.path.join(PACK_ROOT, "kenney_medieval-rts", "Spritesheet", "medievalRTS_spritesheet.png")
 PC = os.path.join(PACK_ROOT, "Pixel Crawler - Free Pack", "Entities")
 
+# Day 9 OST (Ivan Duch). The seven source tracks ship at the CHRONICLE root with
+# their original release names; this maps each to the slug filename the frontend
+# AudioManager loads from assets/audio/music/. Copied raw (mp3 -> mp3, no
+# re-encode). Missing sources are skipped with a warning, exactly like the
+# graceful no-op the renderer applies to absent audio - so a clone without the
+# tracks still sets up the rest of the assets cleanly. CREDIT: Ivan Duch.
+MUSIC = {
+    "small-town-feeling.mp3": "Dragon Tales 1 - Small Town Feeling.mp3",
+    "emonds-field.mp3": "Two Rivers Tales - Emond's Field.mp3",
+    "elven-town.mp3": "Venture Forth, Chapter 3 - Elven Town.mp3",
+    "eldemmors-market.mp3": "Venture Forth, Chapter 2 - Eldemmor's Market.mp3",
+    "trading-harbor.mp3": "Pirates - Givmaru Trading Harbor.mp3",
+    "old-nights.mp3": "Vampires - Old Nights.mp3",
+    "tuathaan.mp3": "Two Rivers Tales - Tuatha'an.mp3",
+}
+
 # sprite_id -> source 6-frame, 64px walk/run sheet. Uniform layout (384x64) so
 # every character type animates identically. Copied RAW (never trimmed - that
 # would wreck frame alignment).
@@ -99,9 +115,30 @@ def _copy_trimmed(src: str, dst: str) -> None:
     print(f"  {os.path.basename(dst):22s} <- {os.path.basename(src):26s} {img.size}")
 
 
+def copy_music() -> None:
+    """Lay the Ivan Duch OST down under assets/audio/music/ with slug names.
+
+    Raw copy from the CHRONICLE-root source tracks; absent sources are skipped
+    (so this never aborts the rest of the setup). The destination dir is
+    gitignored, like every other generated asset layer.
+    """
+    music_dst = os.path.join(ASSETS, "audio", "music")
+    os.makedirs(music_dst, exist_ok=True)
+    for slug, src_name in MUSIC.items():
+        src = os.path.join(PACK_ROOT, src_name)
+        if not os.path.isfile(src):
+            print(f"  {slug:22s} -- SKIP (missing {src_name})")
+            continue
+        shutil.copyfile(src, os.path.join(music_dst, slug))
+        print(f"  {slug:22s} <- {src_name}")
+
+
 def main() -> None:
     print(f"pack root : {PACK_ROOT}")
     print(f"assets    : {ASSETS}")
+
+    print("music (Ivan Duch OST, slugged copies):")
+    copy_music()
 
     print("buildings (Fan-tasy, detailed):")
     fantasy_buildings = os.path.join(FANTASY_ART, "Buildings")
