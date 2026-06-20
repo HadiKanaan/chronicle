@@ -15,6 +15,25 @@ export default function DialogueBox({ dialogue, onSend, onClose }) {
     setDraft('');
   }, [dialogue?.npcId]);
 
+  // Escape closes the dialogue. Registered only while a dialogue is open, in the
+  // capture phase with stopPropagation, so it pre-empts App's Escape handler
+  // (which would otherwise open the pause menu) and works whether or not focus
+  // is in the text input.
+  useEffect(() => {
+    if (!dialogue) {
+      return undefined;
+    }
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [dialogue, onClose]);
+
   if (!dialogue) {
     return null;
   }
@@ -95,6 +114,9 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
+    // Above the HUD overlay plates (z 10) and the manual-pause indicator (z 20),
+    // but below the pause menu / continent overlay (z 60) and the splash (z 80).
+    zIndex: 40,
     background: 'rgba(9, 11, 16, 0.95)',
     borderTop: '1px solid #2e3540',
     color: '#f5f5f5',
