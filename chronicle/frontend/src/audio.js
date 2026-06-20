@@ -112,11 +112,17 @@ export class AudioManager {
   unlock() {
     if (this.unlocked) return;
     this.unlocked = true;
-    Howler.volume(this.masterVolume); // honor a master volume set before unlock
-    Howler.mute(this.masterMuted);
-    this._ensureFootsteps(); // preload so the first step isn't silent
-    this._startMusicPool(isNight(this.lastTimeOfDay));
-    this._syncAmbient(this.lastWeather, this.lastTimeOfDay);
+    // Guarded: if the context is blocked/interrupted, starting audio must not
+    // throw into the caller (the title splash) and leave the game un-started.
+    try {
+      Howler.volume(this.masterVolume); // honor a master volume set before unlock
+      Howler.mute(this.masterMuted);
+      this._ensureFootsteps(); // preload so the first step isn't silent
+      this._startMusicPool(isNight(this.lastTimeOfDay));
+      this._syncAmbient(this.lastWeather, this.lastTimeOfDay);
+    } catch (error) {
+      // The game is fully playable without audio; a later update() retries/resumes.
+    }
   }
 
   // React to a fresh RenderPayload. Cheap and idempotent: it only acts when the
@@ -130,11 +136,25 @@ export class AudioManager {
     this.lastWeather = weather;
     if (!this.unlocked) return;
 
-    // Day<->night flip: crossfade the OST to the other pool.
-    if (flipped && this.musicNight !== isNight(timeOfDay)) {
-      this._startMusicPool(isNight(timeOfDay));
+    // Every Web Audio touch below is guarded. Starting a screen-share that
+    // captures this tab's audio (or an output-device change) can suspend or
+    // interrupt the AudioContext, after which Howler calls throw. Audio is
+    // best-effort (Day 9), so we resume a suspended context when we can and
+    // swallow anything that still throws - a struggling audio layer must NEVER
+    // propagate into the game's poll/render loop (an earlier version let this
+    // blank the world to EMPTY_STATE every 200ms while sharing audio).
+    try {
+      if (Howler.ctx && Howler.ctx.state === 'suspended') {
+        Howler.ctx.resume().catch(() => {});
+      }
+      // Day<->night flip: crossfade the OST to the other pool.
+      if (flipped && this.musicNight !== isNight(timeOfDay)) {
+        this._startMusicPool(isNight(timeOfDay));
+      }
+      this._syncAmbient(weather, timeOfDay);
+    } catch (error) {
+      // Interrupted context / device change mid-call: ignore and retry next poll.
     }
-    this._syncAmbient(weather, timeOfDay);
   }
 
   // --- channel controls ---------------------------------------------------
@@ -304,17 +324,27 @@ export class AudioManager {
   // drone. Silent until unlocked and until the clip has loaded.
   playFootstep(tileType) {
     if (!this.unlocked) return;
-    this._ensureFootsteps();
-    if (!this.footstepReady) return;
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    if (now - this.lastFootstepAt < FOOTSTEP_MIN_MS) return;
-    this.lastFootstepAt = now;
-    if (this.footstepId !== null) this.footstepHowl.stop(this.footstepId);
-    const id = this.footstepHowl.play('step');
-    this.footstepId = id;
-    const gain = HARD_TILES.has(tileType) ? 1.0 : 0.72;
-    this.footstepHowl.volume(this.volumes.sfx * gain, id);
-    this.footstepHowl.rate(0.92 + Math.random() * 0.16, id); // subtle pitch jitter
+    // CRITICAL: this runs from the movement key handler BEFORE the move intent is
+    // posted. It must never throw, or the throw would skip sendInput(move) and
+    // the step would never reach the backend (the player teleports back). Web
+    // Audio can throw if the context was interrupted by screen-share audio
+    // capture, so the whole body is guarded - a missing footstep is fine, a
+    // dropped move is not.
+    try {
+      this._ensureFootsteps();
+      if (!this.footstepReady) return;
+      const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      if (now - this.lastFootstepAt < FOOTSTEP_MIN_MS) return;
+      this.lastFootstepAt = now;
+      if (this.footstepId !== null) this.footstepHowl.stop(this.footstepId);
+      const id = this.footstepHowl.play('step');
+      this.footstepId = id;
+      const gain = HARD_TILES.has(tileType) ? 1.0 : 0.72;
+      this.footstepHowl.volume(this.volumes.sfx * gain, id);
+      this.footstepHowl.rate(0.92 + Math.random() * 0.16, id); // subtle pitch jitter
+    } catch (error) {
+      // best-effort: a footstep must never interrupt player movement
+    }
   }
 
   // --- voice --------------------------------------------------------------
@@ -323,22 +353,26 @@ export class AudioManager {
   // still playing so a new reply never overlaps the previous one.
   playVoiceBase64(audioB64, format = 'mp3') {
     if (!audioB64) return;
-    if (this.voiceHowl) {
-      this.voiceHowl.stop();
-      this.voiceHowl.unload();
-      this.voiceHowl = null;
+    try {
+      if (this.voiceHowl) {
+        this.voiceHowl.stop();
+        this.voiceHowl.unload();
+        this.voiceHowl = null;
+      }
+      const fmt = format === 'wav' ? 'wav' : 'mp3';
+      const mime = fmt === 'wav' ? 'audio/wav' : 'audio/mp3';
+      const howl = new Howl({
+        src: [`data:${mime};base64,${audioB64}`],
+        format: [fmt],
+        volume: this.volumes.voice,
+        onend: () => howl.unload(),
+        onloaderror: () => howl.unload()
+      });
+      this.voiceHowl = howl;
+      howl.play();
+    } catch (error) {
+      // best-effort voice playback; never affects the dialogue flow
     }
-    const fmt = format === 'wav' ? 'wav' : 'mp3';
-    const mime = fmt === 'wav' ? 'audio/wav' : 'audio/mp3';
-    const howl = new Howl({
-      src: [`data:${mime};base64,${audioB64}`],
-      format: [fmt],
-      volume: this.volumes.voice,
-      onend: () => howl.unload(),
-      onloaderror: () => howl.unload()
-    });
-    this.voiceHowl = howl;
-    howl.play();
   }
 }
 

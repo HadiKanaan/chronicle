@@ -115,20 +115,30 @@ export default function App() {
     let cancelled = false;
 
     const loadState = async () => {
+      let nextState;
       try {
-        const nextState = await getState();
-        if (cancelled) {
-          return;
-        }
-        setGameState(nextState);
-        setNotifications((nextState.notifications ?? []).slice(-6));
-        // Audio reacts to the authoritative payload (time_of_day, weather). The
-        // manager no-ops until unlocked by the title splash below.
-        audioManager.update(nextState);
+        nextState = await getState();
       } catch (error) {
-        if (!cancelled) {
-          setGameState(EMPTY_STATE);
-        }
+        // A transient poll failure (network hiccup, a stall while a screen-share
+        // captures this tab) must NOT blank the world. Keep the last good state -
+        // wiping to EMPTY_STATE made the world flicker and the player teleport.
+        // Before first success, the default state is already EMPTY_STATE.
+        return;
+      }
+      if (cancelled) {
+        return;
+      }
+      setGameState(nextState);
+      setNotifications((nextState.notifications ?? []).slice(-6));
+      // Audio reacts to the authoritative payload (time_of_day, weather), but is
+      // fully isolated: a Web Audio exception (e.g. the context interrupted when
+      // screen-share audio capture starts) is swallowed here so it can NEVER fall
+      // through and blank the world. The manager no-ops until unlocked by the
+      // title splash, and is internally guarded too (belt and suspenders).
+      try {
+        audioManager.update(nextState);
+      } catch (audioError) {
+        // a struggling audio layer never affects what you see or control
       }
     };
 
