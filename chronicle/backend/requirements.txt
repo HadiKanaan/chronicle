@@ -5,6 +5,7 @@ numpy
 ollama
 openai
 requests
+websockets
 python-dotenv
 pydantic
 pytest

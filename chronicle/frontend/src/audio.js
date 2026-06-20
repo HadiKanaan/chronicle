@@ -308,18 +308,21 @@ export class AudioManager {
   }
 
   // --- voice --------------------------------------------------------------
-  // Play one NPC line from a base64 mp3 (from /api/voice). Replaces any clip
+  // Play one NPC line from a base64 clip (from /api/voice). The format comes
+  // from the backend — mp3 (Azure Speech) or wav (Realtime). Replaces any clip
   // still playing so a new reply never overlaps the previous one.
-  playVoiceBase64(audioB64) {
+  playVoiceBase64(audioB64, format = 'mp3') {
     if (!audioB64) return;
     if (this.voiceHowl) {
       this.voiceHowl.stop();
       this.voiceHowl.unload();
       this.voiceHowl = null;
     }
+    const fmt = format === 'wav' ? 'wav' : 'mp3';
+    const mime = fmt === 'wav' ? 'audio/wav' : 'audio/mp3';
     const howl = new Howl({
-      src: [`data:audio/mp3;base64,${audioB64}`],
-      format: ['mp3'],
+      src: [`data:${mime};base64,${audioB64}`],
+      format: [fmt],
       volume: this.volumes.voice,
       onend: () => howl.unload(),
       onloaderror: () => howl.unload()

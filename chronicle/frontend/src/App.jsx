@@ -225,7 +225,7 @@ export default function App() {
       if (result.npc_response) {
         sendVoice(npcId, result.npc_response).then((voiceResult) => {
           if (voiceResult?.voiced && dialogue?.npcId === npcId) {
-            audioManager.playVoiceBase64(voiceResult.audio_b64);
+            audioManager.playVoiceBase64(voiceResult.audio_b64, voiceResult.format);
           }
         });
       }

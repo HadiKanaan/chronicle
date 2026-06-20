@@ -1293,7 +1293,9 @@ def _synthesize_voice(npc_id: str, text: str) -> dict[str, Any]:
     return {
         "voiced": True,
         "audio_b64": base64.b64encode(audio).decode("ascii"),
-        "format": "mp3",
+        # mp3 from Azure Speech, wav from the Realtime path - the frontend
+        # decodes with whatever the configured endpoint produced.
+        "format": voice.audio_format(),
     }
 
 

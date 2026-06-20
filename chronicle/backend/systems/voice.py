@@ -32,20 +32,32 @@ database and never blocks the event loop: ``main.py`` calls ``synthesize`` via
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
+import json
 import logging
 import os
+import struct
 import xml.sax.saxutils as saxutils
 from pathlib import Path
 from typing import Any, Optional
 
-try:  # pragma: no cover - missing lib just means voice stays unavailable
+try:  # pragma: no cover - missing lib just means the Speech REST path is off
     import requests
 
     _REQUESTS_IMPORTED = True
 except Exception:  # noqa: BLE001
     requests = None  # type: ignore[assignment]
     _REQUESTS_IMPORTED = False
+
+try:  # pragma: no cover - missing lib just means the realtime path is off
+    import websockets
+
+    _WEBSOCKETS_IMPORTED = True
+except Exception:  # noqa: BLE001
+    websockets = None  # type: ignore[assignment]
+    _WEBSOCKETS_IMPORTED = False
 
 
 logger = logging.getLogger("chronicle.voice")
@@ -100,14 +112,39 @@ def _tts_config() -> tuple[Optional[str], Optional[str]]:
     )
 
 
+def _is_realtime_endpoint(endpoint: Optional[str]) -> bool:
+    """True for an Azure OpenAI *Realtime* endpoint (e.g.
+    .../openai/v1/realtime?model=gpt-realtime-2) as opposed to an Azure Speech
+    TTS REST endpoint (.../cognitiveservices/v1). They use entirely different
+    transports - a WebSocket vs an SSML HTTP POST - so synthesize() dispatches
+    on this."""
+    if not endpoint:
+        return False
+    return "/realtime" in endpoint.split("?", 1)[0]
+
+
 def voice_available() -> bool:
-    """True only when the requests lib is importable and both creds are present.
+    """True only when both creds are present AND the transport the configured
+    endpoint needs is importable: ``websockets`` for a Realtime endpoint,
+    ``requests`` for a Speech REST endpoint.
 
     Never raises and never touches the network - it just gates the feature, so
     the render payload and the endpoint can report availability cheaply.
     """
     endpoint, key = _tts_config()
-    return bool(_REQUESTS_IMPORTED and endpoint and key)
+    if not (endpoint and key):
+        return False
+    if _is_realtime_endpoint(endpoint):
+        return _WEBSOCKETS_IMPORTED
+    return _REQUESTS_IMPORTED
+
+
+def audio_format() -> str:
+    """The container the configured endpoint produces: Realtime streams raw PCM
+    we wrap as ``wav``; Azure Speech returns ``mp3``. main.py stamps this onto
+    the /api/voice response so the frontend decodes with the right format."""
+    endpoint, _ = _tts_config()
+    return "wav" if _is_realtime_endpoint(endpoint) else "mp3"
 
 
 def _stable_hash(value: str) -> int:
@@ -228,18 +265,13 @@ def _write_cache(path: Path, audio: bytes) -> None:
 
 
 def synthesize(text: str, npc: dict[str, Any]) -> Optional[bytes]:
-    """Return mp3 bytes for an NPC line, or None on any failure (never raises).
+    """Return audio bytes for an NPC line, or None on any failure (never raises).
 
-    Order of operations:
-      1. Bail to None if voice is unavailable or the text is empty.
-      2. Serve from the disk cache when this exact (voice, prosody, text) was
-         synthesized before - no second HTTP hit, no second charge.
-      3. Otherwise POST the SSML to Azure Speech with the documented headers,
-         cache the bytes, and return them.
-
-    The subscription key is sent in the request header only; it is never logged.
-    Any transport/HTTP/parse failure is logged by class via the chronicle.voice
-    logger and swallowed into a None return so the caller falls back silently.
+    Dispatches on the configured endpoint: a Realtime endpoint drives the
+    gpt-realtime model as a TTS engine over a WebSocket (returns WAV); a Speech
+    endpoint POSTs SSML (returns mp3). Either way the result is disk-cached, the
+    key is never logged, and any failure is swallowed into None so the caller
+    falls back silently.
     """
     if not voice_available():
         return None
@@ -247,6 +279,14 @@ def synthesize(text: str, npc: dict[str, Any]) -> Optional[bytes]:
     if not text:
         return None
 
+    endpoint, key = _tts_config()
+    if _is_realtime_endpoint(endpoint):
+        return _synthesize_realtime(endpoint, key, text, npc)
+    return _synthesize_speech(endpoint, key, text, npc)
+
+
+def _synthesize_speech(endpoint: str, key: str, text: str, npc: dict[str, Any]) -> Optional[bytes]:
+    """Azure Speech REST path: cache, else POST SSML, cache, return mp3 bytes."""
     voice = select_voice(npc)
     prosody = select_prosody(npc)
     cache_path = _cache_path(voice, prosody, text)
@@ -254,7 +294,6 @@ def synthesize(text: str, npc: dict[str, Any]) -> Optional[bytes]:
     if cached is not None:
         return cached
 
-    endpoint, key = _tts_config()
     ssml = build_ssml(text, npc)
     try:
         response = requests.post(
@@ -280,3 +319,162 @@ def synthesize(text: str, npc: dict[str, Any]) -> Optional[bytes]:
 
     _write_cache(cache_path, audio)
     return audio
+
+
+# --------------------------------------------------------------------------- #
+# Azure OpenAI Realtime path (drive gpt-realtime as a TTS engine over a WS)
+# --------------------------------------------------------------------------- #
+# The realtime model exposes a fixed set of voices (not the en-GB neural pool);
+# SSML prosody isn't available, so age/mood are folded into the spoken
+# instructions instead. Voices per the GA gpt-realtime catalogue.
+REALTIME_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"]
+REALTIME_DEMON_VOICE = "ash"  # the deepest/grittiest of the set
+_REALTIME_SAMPLE_RATE = 24000  # gpt-realtime streams 24kHz mono PCM16
+_REALTIME_TIMEOUT_SECONDS = 30.0
+
+
+def _realtime_voice(npc: dict[str, Any]) -> str:
+    """Deterministic per-NPC realtime voice (Demon Lord fixed), same sha1 scheme
+    as select_voice so a villager keeps one voice across runs."""
+    if npc.get("is_demon_lord"):
+        return REALTIME_DEMON_VOICE
+    npc_id = str(npc.get("id", npc.get("name", "")))
+    return REALTIME_VOICES[_stable_hash(npc_id) % len(REALTIME_VOICES)]
+
+
+def _realtime_instructions(npc: dict[str, Any]) -> str:
+    """System instructions that turn the chat-native realtime model into a
+    verbatim TTS reader, with age/mood folded in (no SSML available here)."""
+    parts = [
+        "You are the speaking voice of a single fantasy-village character.",
+        "Read the user's message ALOUD, word for word, as that character's spoken line.",
+        "Do NOT answer it, react to it, translate it, or add or drop any words -",
+        "speak only the exact text you are given, then stop.",
+    ]
+    age = int(npc.get("age", 30) or 30)
+    if npc.get("is_demon_lord"):
+        parts.append("Voice: deep, slow, and menacing.")
+    elif age >= 60:
+        parts.append("Voice: an older person - lower and slower.")
+    elif age <= 16:
+        parts.append("Voice: a young person - lighter and a little quicker.")
+    mood_tone = {
+        "angry": "angry and clipped",
+        "happy": "warm and cheerful",
+        "anxious": "nervous and hurried",
+        "fearful": "frightened and hushed",
+        "suspicious": "wary and guarded",
+        "grieving": "sorrowful and subdued",
+    }.get(str(npc.get("current_mood", "neutral")).lower())
+    if mood_tone:
+        parts.append(f"Tone: {mood_tone}.")
+    return " ".join(parts)
+
+
+def _pcm16_to_wav(pcm: bytes, sample_rate: int = _REALTIME_SAMPLE_RATE, channels: int = 1) -> bytes:
+    """Wrap raw little-endian PCM16 mono samples in a minimal 44-byte WAV header
+    so the browser can play the realtime model's audio without transcoding."""
+    byte_rate = sample_rate * channels * 2
+    block_align = channels * 2
+    data_len = len(pcm)
+    header = b"RIFF" + struct.pack("<I", 36 + data_len) + b"WAVE"
+    header += b"fmt " + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, 16)
+    header += b"data" + struct.pack("<I", data_len)
+    return header + pcm
+
+
+def _realtime_cache_path(voice: str, instructions: str, text: str) -> Path:
+    """Cache realtime audio by (voice, instructions, text) - instructions carry
+    the age/mood flavour, so two moods of the same line cache separately."""
+    return _cache_path(voice, {"pitch": "rt", "rate": str(_stable_hash(instructions))}, text)
+
+
+def _synthesize_realtime(endpoint: str, key: str, text: str, npc: dict[str, Any]) -> Optional[bytes]:
+    """Realtime TTS path: cache, else run the WS synthesis, cache, return WAV."""
+    voice = _realtime_voice(npc)
+    instructions = _realtime_instructions(npc)
+    cache_path = _realtime_cache_path(voice, instructions, text)
+    cached = _read_cache(cache_path)
+    if cached is not None:
+        return cached
+    try:
+        audio = asyncio.run(
+            asyncio.wait_for(
+                _realtime_collect(endpoint, key, text, voice, instructions),
+                timeout=_REALTIME_TIMEOUT_SECONDS,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 - any failure -> silent fallback
+        logger.warning("Realtime TTS failed (voice=%s): %r", voice, exc)
+        return None
+    if not audio:
+        return None
+    _write_cache(cache_path, audio)
+    return audio
+
+
+async def _realtime_collect(
+    endpoint: str, key: str, text: str, voice: str, instructions: str
+) -> Optional[bytes]:
+    """Open the realtime WebSocket, ask the model to speak ``text`` in ``voice``,
+    and concatenate the streamed PCM16 audio into a WAV. Returns None on no audio.
+
+    Targets the GA gpt-realtime event schema; audio collection is tolerant of
+    both the GA (`response.output_audio.delta`) and beta (`response.audio.delta`)
+    delta event names. An ``error`` event from the server is logged (message
+    only, never the key) and ends the stream - that message is the first thing to
+    check if your endpoint's schema differs.
+    """
+    ws_url = "wss://" + endpoint.split("://", 1)[1]  # https->wss, keep path+query
+    pcm = bytearray()
+    async with websockets.connect(
+        ws_url, additional_headers={"api-key": key}, max_size=None
+    ) as ws:
+        # Configure the session as an audio-out TTS reader (GA schema).
+        await ws.send(json.dumps({
+            "type": "session.update",
+            "session": {
+                "type": "realtime",
+                "instructions": instructions,
+                "output_modalities": ["audio"],
+                "audio": {
+                    "output": {
+                        "voice": voice,
+                        "format": {"type": "audio/pcm", "rate": _REALTIME_SAMPLE_RATE},
+                    }
+                },
+            },
+        }))
+        # Hand it the exact line, then ask for one spoken response.
+        await ws.send(json.dumps({
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": text}],
+            },
+        }))
+        await ws.send(json.dumps({"type": "response.create"}))
+
+        async for raw in ws:
+            try:
+                evt = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            etype = str(evt.get("type", ""))
+            if etype.endswith("audio.delta") and evt.get("delta"):
+                try:
+                    pcm += base64.b64decode(evt["delta"])
+                except (ValueError, TypeError):
+                    continue
+            elif etype == "error":
+                message = ""
+                if isinstance(evt.get("error"), dict):
+                    message = str(evt["error"].get("message", ""))
+                logger.warning("Realtime TTS server error: %s", message or "(no message)")
+                break
+            elif etype in ("response.done", "response.completed", "response.output_audio.done"):
+                break
+    if not pcm:
+        return None
+    return _pcm16_to_wav(bytes(pcm))
