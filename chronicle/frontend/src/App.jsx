@@ -253,6 +253,7 @@ export default function App() {
     sendInput({ type: 'dialogue_open', payload: { npc_id: npc.id } }).catch(() => {});
     setDialogue({
       npcId: npc.id,
+      npcSpriteId: npc.sprite_id,
       npcName: npc.name,
       occupation: '',
       mood: npc.mood ?? 'neutral',
@@ -435,7 +436,13 @@ export default function App() {
         </div>
       ) : null}
 
-      <DialogueBox dialogue={dialogue} onSend={sendLine} onClose={closeDialogue} />
+      <DialogueBox
+        dialogue={dialogue}
+        onSend={sendLine}
+        onClose={closeDialogue}
+        playerSpriteId={gameState.player?.sprite_id}
+        playerName={gameState.player?.name}
+      />
       {showContinent ? <ContinentOverlay onClose={() => setShowContinent(false)} /> : null}
       <PauseMenu open={showPauseMenu} onResume={resumeFromPauseMenu} gameState={visibleState} />
       {!splashGone ? <TitleSplash onBegin={beginGame} /> : null}

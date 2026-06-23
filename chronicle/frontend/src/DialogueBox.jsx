@@ -1,7 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
+import SpritePortrait from './SpritePortrait';
 import { COLORS, FONTS } from './theme';
 
-export default function DialogueBox({ dialogue, onSend, onClose }) {
+// Chat-app style conversation panel (Day 10 QoL): a self-contained framed box that
+// sits over the world. The two speakers face each other at the top - the NPC's
+// enlarged sprite on the left, the player's on the right - and the transcript
+// below reads like a messaging thread: NPC lines as bubbles on the left, the
+// player's on the right, one per row. Presentational only; the dialogue flow,
+// memory, and sentiment are unchanged.
+
+// A small mood glyph for the NPC's portrait caption (emoji = asset-free, graceful;
+// an unknown mood just shows none).
+const MOOD_EMOJI = {
+  happy: '😊', content: '🙂', neutral: '😐', proud: '😌', hopeful: '🙂',
+  sad: '😔', grieving: '😢', angry: '😠', fearful: '😨', suspicious: '🤨',
+  wary: '🤨', annoyed: '😒', tired: '😪',
+};
+
+export default function DialogueBox({ dialogue, onSend, onClose, playerSpriteId, playerName }) {
   const [draft, setDraft] = useState('');
   const transcriptRef = useRef(null);
 
@@ -49,46 +65,72 @@ export default function DialogueBox({ dialogue, onSend, onClose }) {
     onSend(text);
   };
 
+  const moodGlyph = MOOD_EMOJI[(dialogue.mood || '').toLowerCase()] ?? '';
+
   return (
-    <div style={styles.wrapper} className="cv-slide-up">
-      <div style={styles.panel}>
-        <div style={styles.headerRow}>
-          <div>
-            <h2 style={styles.title}>{dialogue.npcName}</h2>
-            <span style={styles.subtitle}>
-              {dialogue.occupation ? `${dialogue.occupation} · ` : ''}
-              <span style={styles.mood}>{dialogue.mood}</span>
-              {dialogue.disposition ? ` · ${dialogue.disposition} toward you` : ''}
-            </span>
+    <div style={styles.wrapper}>
+      <div style={styles.box} className="cv-plate cv-slide-up">
+        <button type="button" className="cv-btn" style={styles.close} onClick={onClose} aria-label="Close">
+          ✕
+        </button>
+
+        {/* The two speakers, facing each other. */}
+        <div style={styles.stage}>
+          <div style={styles.speakerLeft}>
+            <SpritePortrait spriteId={dialogue.npcSpriteId} tintId={dialogue.npcId} name={dialogue.npcName} size={72} />
+            <div style={styles.speakerMeta}>
+              <div style={styles.npcName}>{dialogue.npcName}</div>
+              {dialogue.occupation ? <div style={styles.occupation}>{dialogue.occupation}</div> : null}
+              <div style={styles.mood}>
+                {moodGlyph ? `${moodGlyph} ` : ''}{dialogue.mood}
+              </div>
+            </div>
           </div>
-          <button type="button" className="cv-btn" style={styles.closeButton} onClick={onClose}>
-            Close (Esc)
-          </button>
+
+          <div style={styles.speakerRight}>
+            <div style={{ ...styles.speakerMeta, ...styles.speakerMetaRight }}>
+              <div style={styles.youName}>{playerName || 'You'}</div>
+              {dialogue.disposition ? (
+                <div style={styles.disposition}>{dialogue.disposition} toward you</div>
+              ) : null}
+            </div>
+            <SpritePortrait spriteId={playerSpriteId} name={playerName || 'You'} size={72} />
+          </div>
         </div>
 
         {dialogue.remembered.length > 0 ? (
-          <p style={styles.remembered}>
-            ❧ They recall: {dialogue.remembered[dialogue.remembered.length - 1]}
-          </p>
+          <div style={styles.remembered}>
+            ❧ {dialogue.npcName} recalls: {dialogue.remembered[dialogue.remembered.length - 1]}
+          </div>
         ) : null}
 
+        {/* The thread. */}
         <div ref={transcriptRef} className="cv-scroll" style={styles.transcript}>
           {dialogue.lines.length === 0 && !dialogue.busy ? (
-            <p style={styles.placeholder}>{dialogue.npcName} waits for you to speak.</p>
+            <div style={styles.placeholder}>{dialogue.npcName} waits for you to speak.</div>
           ) : null}
-          {dialogue.lines.map((line, index) => (
-            <p
-              key={index}
-              style={line.speaker === 'player' ? styles.playerLine : styles.npcLine}
-            >
-              <strong style={line.speaker === 'player' ? styles.playerName : styles.npcName}>
-                {line.speaker === 'player' ? 'You' : dialogue.npcName}:
-              </strong>{' '}
-              {line.text}
-            </p>
-          ))}
+          {dialogue.lines.map((line, index) => {
+            const isPlayer = line.speaker === 'player';
+            return (
+              <div
+                key={index}
+                style={isPlayer ? styles.rowRight : styles.rowLeft}
+                className="cv-slide-up"
+              >
+                <div style={isPlayer ? styles.bubblePlayer : styles.bubbleNpc}>{line.text}</div>
+              </div>
+            );
+          })}
           {dialogue.busy ? (
-            <p style={styles.thinking}>{dialogue.npcName} is thinking…</p>
+            <div style={styles.rowLeft}>
+              <div style={styles.bubbleNpc}>
+                <span style={styles.typing}>
+                  <span style={{ ...styles.dot, animationDelay: '0ms' }}>•</span>
+                  <span style={{ ...styles.dot, animationDelay: '160ms' }}>•</span>
+                  <span style={{ ...styles.dot, animationDelay: '320ms' }}>•</span>
+                </span>
+              </div>
+            </div>
           ) : null}
         </div>
 
@@ -98,7 +140,7 @@ export default function DialogueBox({ dialogue, onSend, onClose }) {
             type="text"
             value={draft}
             maxLength={300}
-            placeholder="Say something…"
+            placeholder={`Say something to ${dialogue.npcName}…`}
             onChange={(event) => setDraft(event.target.value)}
             autoFocus
           />
@@ -125,89 +167,153 @@ const styles = {
     // Above the HUD overlay plates (z 10) and the manual-pause indicator (z 20),
     // but below the pause menu / continent overlay (z 60) and the splash (z 80).
     zIndex: 40,
-    background: 'linear-gradient(180deg, rgba(16,19,25,0.94) 0%, rgba(11,14,18,0.97) 100%)',
-    borderTop: `2px solid ${COLORS.frameDark}`,
-    boxShadow: `inset 0 2px 0 ${COLORS.frameGold}, 0 -8px 28px rgba(0,0,0,0.5)`,
+    display: 'flex',
+    justifyContent: 'center',
+    padding: '0 16px 16px',
+    pointerEvents: 'none',
+  },
+  box: {
+    pointerEvents: 'auto',
+    position: 'relative',
+    width: 'min(760px, 96vw)',
+    maxHeight: '74vh',
+    display: 'flex',
+    flexDirection: 'column',
+    // A near-opaque dark-parchment backing so the thread reads clearly over the
+    // bright live world.
+    background: 'linear-gradient(180deg, rgba(20,23,30,0.97) 0%, rgba(13,16,21,0.98) 100%)',
+    border: `2px solid ${COLORS.frameDark}`,
+    boxShadow: `inset 0 0 0 2px ${COLORS.frameGold}, 0 10px 32px rgba(0,0,0,0.6)`,
+    borderRadius: '4px',
     color: COLORS.cream,
     fontFamily: FONTS.body,
     padding: '14px 16px 16px',
-    boxSizing: 'border-box'
   },
-  panel: {
-    maxWidth: '1100px',
-    margin: '0 auto'
+  close: {
+    position: 'absolute',
+    top: '8px',
+    right: '8px',
+    fontSize: '12px',
+    padding: '3px 9px',
+    lineHeight: 1,
   },
-  headerRow: {
+  stage: {
     display: 'flex',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    gap: '12px'
+    gap: '12px',
+    paddingBottom: '12px',
+    borderBottom: `1px solid ${COLORS.frameDark}`,
   },
-  title: {
-    margin: 0,
+  speakerLeft: {
+    display: 'flex',
+    gap: '10px',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  speakerRight: {
+    display: 'flex',
+    gap: '10px',
+    alignItems: 'center',
+    minWidth: 0,
+  },
+  speakerMeta: { minWidth: 0 },
+  speakerMetaRight: { textAlign: 'right' },
+  npcName: {
     fontFamily: FONTS.display,
-    fontSize: '18px',
+    fontSize: '14px',
     color: COLORS.goldBright,
-    textShadow: '0 2px 0 rgba(0,0,0,0.6)'
+    textShadow: '0 2px 0 rgba(0,0,0,0.6)',
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
   },
-  subtitle: {
-    fontSize: '12px',
+  youName: {
+    fontFamily: FONTS.display,
+    fontSize: '14px',
+    color: COLORS.cream,
+    textShadow: '0 2px 0 rgba(0,0,0,0.6)',
+  },
+  occupation: {
+    fontSize: '11px',
     color: COLORS.creamDim,
-    textTransform: 'capitalize'
+    textTransform: 'capitalize',
   },
   mood: {
-    color: COLORS.goldBright
+    fontSize: '12px',
+    color: COLORS.goldBright,
+    textTransform: 'capitalize',
+    marginTop: '2px',
   },
-  closeButton: {
-    flex: '0 0 auto',
-    fontSize: '12px'
+  disposition: {
+    fontSize: '11px',
+    color: COLORS.creamDim,
+    fontStyle: 'italic',
+    marginTop: '2px',
   },
   remembered: {
     margin: '10px 0 0',
     fontSize: '12px',
     fontStyle: 'italic',
-    color: COLORS.gold
+    color: COLORS.gold,
   },
   transcript: {
-    margin: '12px 0 0',
-    maxHeight: '190px',
+    flex: 1,
+    minHeight: '90px',
+    margin: '12px 0',
     overflowY: 'auto',
-    padding: '10px 12px',
-    background: 'rgba(8, 10, 14, 0.5)',
-    border: `1px solid ${COLORS.frameDark}`,
-    boxShadow: `inset 0 0 0 1px ${COLORS.frameGold}`,
-    borderRadius: '3px'
+    paddingRight: '6px',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
   },
   placeholder: {
-    margin: 0,
     color: COLORS.muted,
-    fontStyle: 'italic'
+    fontStyle: 'italic',
+    textAlign: 'center',
+    margin: 'auto',
   },
-  playerLine: {
-    margin: '6px 0',
-    lineHeight: 1.55,
-    color: COLORS.creamDim
+  rowLeft: {
+    display: 'flex',
+    justifyContent: 'flex-start',
   },
-  npcLine: {
-    margin: '6px 0',
-    lineHeight: 1.55,
-    color: COLORS.cream
+  rowRight: {
+    display: 'flex',
+    justifyContent: 'flex-end',
   },
-  playerName: {
-    color: COLORS.gold
+  bubbleNpc: {
+    maxWidth: '72%',
+    background: 'rgba(42, 36, 22, 0.92)',
+    border: '1px solid #4a3c1f',
+    borderRadius: '10px 10px 10px 2px',
+    padding: '8px 12px',
+    fontSize: '14px',
+    lineHeight: 1.45,
+    color: COLORS.cream,
   },
-  npcName: {
-    color: COLORS.goldBright
+  bubblePlayer: {
+    maxWidth: '72%',
+    background: 'rgba(28, 42, 58, 0.92)',
+    border: '1px solid #2f4a63',
+    borderRadius: '10px 10px 2px 10px',
+    padding: '8px 12px',
+    fontSize: '14px',
+    lineHeight: 1.45,
+    color: '#dce8ff',
   },
-  thinking: {
-    margin: '6px 0',
-    color: COLORS.muted,
-    fontStyle: 'italic'
+  typing: {
+    display: 'inline-flex',
+    gap: '3px',
+    fontSize: '18px',
+    lineHeight: 1,
+    color: COLORS.gold,
+  },
+  dot: {
+    animation: 'cvFadeIn 0.6s ease-in-out infinite alternate',
   },
   inputRow: {
     display: 'flex',
     gap: '8px',
-    marginTop: '12px'
   },
   input: {
     flex: 1,
@@ -219,11 +325,11 @@ const styles = {
     fontSize: '15px',
     fontFamily: FONTS.body,
     borderRadius: '3px',
-    outline: 'none'
+    outline: 'none',
   },
   sendButton: {
     flex: '0 0 auto',
     fontSize: '14px',
-    padding: '8px 18px'
-  }
+    padding: '8px 18px',
+  },
 };

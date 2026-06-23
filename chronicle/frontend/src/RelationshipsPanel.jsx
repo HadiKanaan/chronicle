@@ -1,5 +1,4 @@
-import { useEffect, useRef } from 'react';
-import { CHARACTER_ATLAS, CHARACTER_FALLBACK, CHARACTER_TINTS } from './sprites';
+import SpritePortrait from './SpritePortrait';
 import { COLORS, FONTS, plate, plateHeading } from './theme';
 
 // Day 10 Acquaintances plate (Part D). Display-only: it renders the backend's
@@ -8,87 +7,6 @@ import { COLORS, FONTS, plate, plateHeading } from './theme';
 // no intents — just a mirror of payload state. Each row shows the NPC's idle
 // sprite as a small tinted portrait, name, occupation, mood, disposition toward
 // the player, and how many times you've spoken.
-
-// Stable per-id tint choice (0 = no tint), mirroring the world renderer so an
-// acquaintance's portrait matches how they look in the world.
-function tintIndexFor(id) {
-  if (id == null) return 0;
-  let h = 0;
-  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) & 0x7fffffff;
-  return h % CHARACTER_TINTS.length;
-}
-
-// Module-level cache of character sheets, keyed by src. A sheet loads at most
-// once across the whole panel; every portrait waiting on it is redrawn when it
-// resolves (so multiple NPCs sharing one base sheet all paint, not just the
-// first to request it).
-const _sheets = new Map(); // src -> { img, ready, error, waiters: [] }
-function getSheet(src, onReady) {
-  let rec = _sheets.get(src);
-  if (rec) {
-    if (!rec.ready && !rec.error) rec.waiters.push(onReady);
-    return rec;
-  }
-  rec = { img: new Image(), ready: false, error: false, waiters: [onReady] };
-  _sheets.set(src, rec);
-  rec.img.onload = () => {
-    rec.ready = true;
-    rec.waiters.splice(0).forEach((cb) => cb());
-  };
-  rec.img.onerror = () => {
-    rec.error = true; // graceful: portrait falls back to a monogram chip
-    rec.waiters.splice(0).forEach((cb) => cb());
-  };
-  rec.img.src = src;
-  return rec;
-}
-
-// One pixel-crisp portrait: frame 0 (idle) of the NPC's walk sheet, per-NPC
-// tint, drawn into a small canvas. If the sheet is missing it falls back to a
-// monogrammed parchment chip — never a blank or a crash.
-function SpritePortrait({ spriteId, npcId, name, size = 38 }) {
-  const canvasRef = useRef(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const entry = CHARACTER_ATLAS[spriteId] ?? CHARACTER_FALLBACK;
-
-    const draw = () => {
-      const cur = canvasRef.current;
-      if (!cur) return;
-      const cx = cur.getContext('2d');
-      cx.imageSmoothingEnabled = false;
-      cx.clearRect(0, 0, cur.width, cur.height);
-      const rec = _sheets.get(entry.src);
-      if (!rec || !rec.ready || rec.error) return; // CSS fallback shows through
-      // Source frame 0; show the head-and-shoulders region (the sprite stands at
-      // the bottom of its cell), centered, scaled to fill the portrait.
-      const cropH = Math.round(entry.fh * 0.62); // upper body
-      const sy = Math.round(entry.fh * 0.16);
-      cx.drawImage(rec.img, 0, sy, entry.fw, cropH, 0, 0, cur.width, cur.height);
-    };
-
-    const rec = getSheet(entry.src, draw);
-    if (rec.ready) draw();
-  }, [spriteId, npcId]);
-
-  const tint = CHARACTER_TINTS[tintIndexFor(npcId)];
-  const initial = (name || '?').trim().charAt(0).toUpperCase() || '?';
-  return (
-    <div style={{ ...styles.portrait, width: size, height: size }}>
-      <span style={styles.portraitInitial}>{initial}</span>
-      <canvas
-        ref={canvasRef}
-        width={size}
-        height={size}
-        className="cv-pixel"
-        style={styles.portraitCanvas}
-      />
-      {tint ? <div style={{ ...styles.portraitTint, background: tint }} /> : null}
-    </div>
-  );
-}
 
 export default function RelationshipsPanel({ contacts }) {
   const list = contacts ?? [];
@@ -101,7 +19,7 @@ export default function RelationshipsPanel({ contacts }) {
         <div style={styles.rows}>
           {list.map((c) => (
             <div key={c.npc_id} style={styles.row}>
-              <SpritePortrait spriteId={c.sprite_id} npcId={c.npc_id} name={c.name} />
+              <SpritePortrait spriteId={c.sprite_id} tintId={c.npc_id} name={c.name} />
               <div style={styles.meta}>
                 <div style={styles.nameRow}>
                   <span style={styles.name}>{c.name}</span>
