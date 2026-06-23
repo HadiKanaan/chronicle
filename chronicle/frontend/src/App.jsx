@@ -150,6 +150,14 @@ export default function App() {
     setPaused(false);
   };
 
+  // Toggle the pause menu from an on-screen button (Escape is unreliable in
+  // fullscreen - the browser owns it there to exit fullscreen).
+  const togglePauseMenu = () => {
+    const next = !showPauseMenu;
+    setShowPauseMenu(next);
+    setPaused(next);
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -241,15 +249,20 @@ export default function App() {
         talkToNearest();
       } else if (event.key === 'Escape') {
         event.preventDefault();
-        // Esc closes the continent map first if it's up; otherwise it toggles
-        // the pause menu (which freezes / releases the world clock).
+        // Esc closes the continent map first if it's up.
         if (showContinent) {
           setShowContinent(false);
-        } else {
-          const next = !showPauseMenu;
-          setShowPauseMenu(next);
-          setPaused(next);
+          return;
         }
+        // In fullscreen the browser owns Escape (it exits fullscreen) and we
+        // can't cancel it; don't ALSO toggle the pause menu, or Escape would do
+        // two things at once. Use the on-screen Menu button there instead.
+        if (document.fullscreenElement) {
+          return;
+        }
+        const next = !showPauseMenu;
+        setShowPauseMenu(next);
+        setPaused(next);
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -427,6 +440,9 @@ export default function App() {
 
       {/* Bottom-center controls strip. */}
       <div style={styles.bottomCenter}>
+        <button className="cv-btn" style={styles.revealBtn} onClick={togglePauseMenu}>
+          ☰ Menu
+        </button>
         <button
           className="cv-btn"
           style={revealInteriors ? styles.revealOn : styles.revealBtn}
@@ -441,7 +457,7 @@ export default function App() {
         >
           {isFullscreen ? '⛶ Exit fullscreen' : '⛶ Fullscreen'}
         </button>
-        <span style={styles.hint}>E talk · Esc menu · M map · R fog · P pause · B interiors · F fullscreen</span>
+        <span style={styles.hint}>E talk · ☰/Esc menu · M map · R fog · P pause · B interiors · F fullscreen</span>
       </div>
 
       {/* Sticky manual-pause indicator (when paused outside the menu). */}
