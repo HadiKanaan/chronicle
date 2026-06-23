@@ -957,10 +957,11 @@ def _build_render_payload() -> RenderPayload:
     # verbatim. Keep DL-origin rumors (id ..._demonlord) out of the gossip panel
     # - they have their own panel and still spread + colour dialogue. Rumors
     # Abroad now shows organic town gossip only.
+    active_rumors = get_active_rumors()
     rumor_lines = [
         f"{rumor['current_text']} (known to {len(rumor.get('known_by_npc_ids', []))})"
         for rumor in sorted(
-            get_active_rumors(), key=lambda r: str(r.get("id", "")), reverse=True
+            active_rumors, key=lambda r: str(r.get("id", "")), reverse=True
         )
         if rumor.get("current_text") and "demonlord" not in str(rumor.get("id", ""))
     ][:4]
@@ -969,6 +970,21 @@ def _build_render_payload() -> RenderPayload:
         for entry in reversed(world_state_data.get("demon_lord_decisions", [])[-3:])
         if entry.get("summary")
     ]
+
+    # Display-only sim stats for the Debug tab (counts derived from data already
+    # loaded this poll - no extra queries). tier1_enriched/tier1_total shows
+    # whether the startup Tier-1 LLM enrichment has finished.
+    tier1_social = [
+        npc for npc in all_npcs
+        if int(npc.get("tier", 3)) == 1 and not npc.get("is_player") and not npc.get("is_demon_lord")
+    ]
+    debug_stats = {
+        "npc_count": len(all_npcs),
+        "tier1_total": len(tier1_social),
+        "tier1_enriched": sum(1 for npc in tier1_social if npc.get("llm_enriched")),
+        "active_rumors": len(active_rumors),
+        "faction_count": len(all_factions),
+    }
 
     return RenderPayload(
         tiles=tiles,
@@ -996,6 +1012,7 @@ def _build_render_payload() -> RenderPayload:
         azure_available=conversation.azure_available(),
         voice_available=voice.voice_available(),
         voice_enabled=_voice_enabled,
+        debug_stats=debug_stats,
         recent_contacts=_build_recent_contacts(all_npcs),
     )
 

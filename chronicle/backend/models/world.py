@@ -106,6 +106,11 @@ class RenderPayload(BaseModel):
     # the pair to gate its speaker control and the per-reply /api/voice fetch.
     voice_available: bool = False
     voice_enabled: bool = True
+    # Demo/debug stats surfaced for the in-app Debug panel (display-only counts
+    # derived from data already loaded each poll): {npc_count, tier1_total,
+    # tier1_enriched, active_rumors, faction_count}. Lets the Debug tab show, e.g.,
+    # whether the startup Tier-1 LLM enrichment has finished.
+    debug_stats: dict = Field(default_factory=dict)
     # Day 10 (relationships panel): the last few NPCs the player has spoken to,
     # display-ready and derived entirely from existing NPC fields - no new
     # gameplay or persistence. Each entry is {npc_id, name, occupation, sprite_id,

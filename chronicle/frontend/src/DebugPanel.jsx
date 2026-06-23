@@ -28,8 +28,29 @@ export default function DebugPanel({ gameState }) {
   const setField = (name, key, value) =>
     setFacValues((current) => ({ ...current, [name]: { ...current[name], [key]: value } }));
 
+  const stats = gameState.debug_stats ?? {};
+  const statRows = [
+    ['NPCs', stats.npc_count],
+    ['Tier-1 enriched', stats.tier1_total != null ? `${stats.tier1_enriched ?? 0}/${stats.tier1_total}` : undefined],
+    ['Active rumors', stats.active_rumors],
+    ['Factions', stats.faction_count],
+    ['Day / hour', `${gameState.current_day ?? '—'} / ${String(gameState.current_hour ?? 0).padStart(2, '0')}:00`],
+  ];
+
   return (
     <div style={styles.panel}>
+      <div style={styles.group}>
+        <div style={styles.label}>Sim stats</div>
+        <div style={styles.statsGrid}>
+          {statRows.map(([k, v]) => (
+            <div key={k} style={styles.statRow}>
+              <span style={styles.statKey}>{k}</span>
+              <span style={styles.statVal}>{v ?? '—'}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div style={styles.group}>
         <div style={styles.label}>Conversation engine</div>
         <div style={styles.row}>
@@ -158,6 +179,10 @@ const styles = {
     fontFamily: FONTS.body,
   },
   btn: { fontSize: '12px', padding: '4px 10px' },
+  statsGrid: { display: 'flex', flexDirection: 'column', gap: '3px' },
+  statRow: { display: 'flex', justifyContent: 'space-between', fontSize: '12px' },
+  statKey: { color: COLORS.creamDim },
+  statVal: { color: COLORS.goldBright, fontVariantNumeric: 'tabular-nums' },
   muted: { color: COLORS.muted },
   legend: { color: COLORS.muted, fontSize: '11px', marginTop: '2px' },
 };
