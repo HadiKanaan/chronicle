@@ -866,6 +866,10 @@ def _visible_npc_summary(npc: dict[str, Any]) -> dict[str, Any]:
         "sprite_id": _display_sprite(npc),
         "name": npc.get("name", "Unknown"),
         "tier": npc.get("tier", 3),
+        # Display-only occupation so the renderer can pick an occupation-flavored
+        # clothing tint (e.g. a green herbalist, a steel guard) - it's already on
+        # the card and one short string is fine for the 200ms poll.
+        "occupation": npc.get("occupation", ""),
         # Day 4: behavior and mood summaries so the renderer can show why NPCs
         # are where they are (display-only; backend remains the authority).
         "behavior": npc.get("current_behavior", "working"),

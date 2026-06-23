@@ -92,8 +92,12 @@ export class AudioManager {
     this.thunderTimer = null;
     this.thunderHowl = null;
 
-    // Voice channel: the currently-playing clip (replaced on each new line).
+    // Voice channel: the currently-playing clip (replaced on each new line), plus
+    // a tiny pub/sub so the UI can show an NPC "speaking" indicator while a voice
+    // clip plays.
     this.voiceHowl = null;
+    this.voiceActive = false;
+    this.voiceListeners = new Set();
 
     // Footstep SFX: a single preloaded Howl, one short-slice instance at a time.
     this.footstepHowl = null;
@@ -371,6 +375,21 @@ export class AudioManager {
   // Play one NPC line from a base64 clip (from /api/voice). The format comes
   // from the backend — mp3 (Azure Speech) or wav (Realtime). Replaces any clip
   // still playing so a new reply never overlaps the previous one.
+  // Subscribe to voice-playing state changes (true while an NPC clip plays).
+  // Returns an unsubscribe function. Lets the dialogue glow the speaking avatar.
+  onVoice(callback) {
+    this.voiceListeners.add(callback);
+    return () => this.voiceListeners.delete(callback);
+  }
+
+  _setVoiceActive(active) {
+    if (this.voiceActive === active) return;
+    this.voiceActive = active;
+    this.voiceListeners.forEach((cb) => {
+      try { cb(active); } catch (error) { /* a bad listener never breaks audio */ }
+    });
+  }
+
   playVoiceBase64(audioB64, format = 'mp3') {
     if (!audioB64) return;
     try {
@@ -385,13 +404,16 @@ export class AudioManager {
         src: [`data:${mime};base64,${audioB64}`],
         format: [fmt],
         volume: this.volumes.voice,
-        onend: () => howl.unload(),
-        onloaderror: () => howl.unload()
+        onplay: () => this._setVoiceActive(true),
+        onend: () => { this._setVoiceActive(false); howl.unload(); },
+        onstop: () => this._setVoiceActive(false),
+        onloaderror: () => { this._setVoiceActive(false); howl.unload(); }
       });
       this.voiceHowl = howl;
       howl.play();
     } catch (error) {
       // best-effort voice playback; never affects the dialogue flow
+      this._setVoiceActive(false);
     }
   }
 }

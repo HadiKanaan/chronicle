@@ -104,20 +104,64 @@ export const CHARACTER_ATLAS = {
 
 export const CHARACTER_FALLBACK = CHARACTER_ATLAS.human_base;
 
-// Per-NPC clothing tints (a translucent colour cast applied over the sprite, not
-// the player). Index 0 is "no tint" so a share of villagers stay natural; the
-// rest spread across muted hues so a crowd of the same base sprite reads as many
-// different people. Kept low-alpha so skin doesn't look painted.
-export const CHARACTER_TINTS = [
-  null,
-  'rgba(80, 130, 200, 0.30)',   // blue
-  'rgba(70, 150, 90, 0.30)',    // green
-  'rgba(170, 70, 80, 0.30)',    // red
-  'rgba(150, 100, 180, 0.30)',  // purple
-  'rgba(190, 150, 60, 0.30)',   // gold
-  'rgba(70, 160, 170, 0.30)',   // teal
-  'rgba(190, 110, 60, 0.30)',   // orange
+// Per-character RECOLOR tints. Applied as a MULTIPLY pass over the sprite,
+// preserving its shading, and masked to the sprite's own opaque pixels - so they
+// recolor robes/armour instead of washing them out. Strong enough to read as
+// different people from one base sheet: a green vs blue wizard, a black knight, an
+// earthy herbalist. Alpha = recolor strength per colour.
+const TINT = {
+  none: null,
+  blue: 'rgba(70, 120, 210, 0.60)',
+  green: 'rgba(60, 150, 80, 0.60)',
+  crimson: 'rgba(185, 60, 60, 0.58)',
+  purple: 'rgba(145, 90, 190, 0.58)',
+  gold: 'rgba(200, 160, 60, 0.52)',
+  teal: 'rgba(55, 165, 175, 0.58)',
+  orange: 'rgba(200, 115, 50, 0.58)',
+  black: 'rgba(40, 42, 58, 0.66)',
+  earthy: 'rgba(120, 120, 80, 0.55)',
+  brown: 'rgba(120, 80, 50, 0.60)',
+  cream: 'rgba(214, 198, 150, 0.45)',
+};
+
+// Per-occupation tint families: the hue set an NPC of that role draws from (chosen
+// stably by an id hash). Layers occupation-readable colour on top of the
+// occupation->sprite mapping the backend already applies, so the shared
+// wizard/knight/rogue sheets read as many distinct people - e.g. a herbalist in
+// earthy greens vs a priest in pale gold, both on the wizard sheet.
+const OCC_TINT_FAMILY = {
+  herbalist: ['green', 'earthy', 'teal'],
+  priest: ['cream', 'gold', 'purple'],
+  guard: ['blue', 'black', 'teal'],
+  guard_captain: ['black', 'crimson', 'blue'],
+  magistrate: ['purple', 'gold', 'crimson'],
+  merchant: ['crimson', 'orange', 'gold'],
+  trader: ['orange', 'teal', 'green'],
+  tavern_keeper: ['brown', 'crimson', 'gold'],
+  courier: ['teal', 'green', 'blue'],
+};
+
+// Everyone else (including the base villager): a broad spread, with a share left
+// natural so a crowd of one sheet still reads as many different folk.
+const DEFAULT_TINT_FAMILY = [
+  'none', 'blue', 'green', 'crimson', 'purple', 'gold', 'teal', 'orange', 'brown', 'earthy', 'none',
 ];
+
+function _hashId(id) {
+  const s = String(id ?? '');
+  let h = 0;
+  for (let i = 0; i < s.length; i += 1) h = (h * 31 + s.charCodeAt(i)) & 0x7fffffff;
+  return h;
+}
+
+// Stable recolor tint for a character from its occupation + id. Returns an rgba
+// string to multiply over the sprite, or null for "natural". Used by both the
+// world renderer and the dialogue/acquaintance portraits so they always match.
+export function characterTint(occupation, id) {
+  const family = OCC_TINT_FAMILY[occupation] ?? DEFAULT_TINT_FAMILY;
+  const key = family[_hashId(id) % family.length];
+  return TINT[key] ?? null;
+}
 
 // Full-canvas color wash per time_of_day. `null` means draw nothing (full day).
 export const DAY_NIGHT_TINT = {

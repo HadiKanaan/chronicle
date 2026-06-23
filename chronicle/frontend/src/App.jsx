@@ -35,6 +35,18 @@ const EMPTY_STATE = {
 // orthogonal (1.0) and diagonal (1.41) adjacency with a little forgiveness.
 const TALK_RANGE = 1.8;
 
+// A subtle edge-only colour wash per time of day, layered over the vignette for
+// atmosphere (warm at dawn/dusk, cool at night). The canvas already does a full
+// day/night tint; this just deepens the screen edges. Transparent center so it
+// never fights the world. null = no tint (full day).
+const TIME_EDGE_TINT = {
+  dawn: 'radial-gradient(ellipse at center, rgba(0,0,0,0) 52%, rgba(255,150,80,0.16) 100%)',
+  morning: null,
+  afternoon: null,
+  dusk: 'radial-gradient(ellipse at center, rgba(0,0,0,0) 52%, rgba(247,120,58,0.18) 100%)',
+  night: 'radial-gradient(ellipse at center, rgba(0,0,0,0) 48%, rgba(28,40,110,0.26) 100%)',
+};
+
 // The nearest NPC to the player within TALK_RANGE, or null. Lets the player talk
 // to an adjacent NPC without clicking them on the canvas - which is the only way
 // to reach someone standing under a HUD plate (e.g. the Demon Lord in his
@@ -357,6 +369,16 @@ export default function App() {
   // Whoever the player can talk to right now (drives the contextual Talk button).
   const nearbyNpc = dialogue ? null : findNearbyNpc(gameState);
 
+  // How many times the player has spoken with the open NPC (from the existing
+  // recent_contacts feed); 0 = first meeting.
+  const openContact = dialogue
+    ? (gameState.recent_contacts ?? []).find((c) => c.npc_id === dialogue.npcId)
+    : null;
+  const timesTalked = openContact?.times_talked ?? 0;
+
+  // Edge tint for the current time of day (atmosphere layer over the vignette).
+  const timeTint = TIME_EDGE_TINT[gameState.time_of_day];
+
   const closeDialogue = () => {
     setDialogue(null);
     // Resume the world clock when the dialogue window closes.
@@ -372,6 +394,9 @@ export default function App() {
 
       {/* Tasteful screen vignette (pure CSS, non-interactive). */}
       <div className="cv-vignette" />
+
+      {/* Time-of-day edge tint, layered over the vignette for atmosphere. */}
+      {timeTint ? <div style={{ ...styles.timeTint, background: timeTint }} /> : null}
 
       {/* Diegetic edge-anchored HUD plates. */}
       <HUD gameState={visibleState} />
@@ -442,6 +467,7 @@ export default function App() {
         onClose={closeDialogue}
         playerSpriteId={gameState.player?.sprite_id}
         playerName={gameState.player?.name}
+        timesTalked={timesTalked}
       />
       {showContinent ? <ContinentOverlay onClose={() => setShowContinent(false)} /> : null}
       <PauseMenu open={showPauseMenu} onResume={resumeFromPauseMenu} gameState={visibleState} />
@@ -462,6 +488,13 @@ const styles = {
   canvasLayer: {
     position: 'absolute',
     inset: 0,
+  },
+  timeTint: {
+    position: 'fixed',
+    inset: 0,
+    pointerEvents: 'none',
+    zIndex: 6,
+    transition: 'background 1.5s ease',
   },
   acquaintances: {
     position: 'fixed',

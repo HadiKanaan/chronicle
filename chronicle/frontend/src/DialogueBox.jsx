@@ -1,6 +1,40 @@
 import { useEffect, useRef, useState } from 'react';
 import SpritePortrait from './SpritePortrait';
+import { audioManager } from './audio';
 import { COLORS, FONTS } from './theme';
+
+// Quick conversation starters (one click sends the line through the normal flow).
+const OPENERS = [
+  'Greetings.',
+  "What's the latest gossip?",
+  'What do you make of the Demon Lord?',
+  'Who do you trust here?',
+];
+
+// Map a disposition phrase (from the backend's sentiment_phrase) to a 1-5 level
+// for the heart meter; 0 = unknown.
+function dispositionLevel(phrase) {
+  const p = (phrase || '').toLowerCase();
+  if (p.includes('warm')) return 5;
+  if (p.includes('friendly')) return 4;
+  if (p.includes('neutral')) return 3;
+  if (p.includes('wary')) return 2;
+  if (p.includes('hostile')) return 1;
+  return 0;
+}
+
+function DispositionMeter({ phrase }) {
+  const level = dispositionLevel(phrase);
+  if (!level) return null;
+  const color = level >= 4 ? '#7fbf6a' : level === 3 ? COLORS.gold : COLORS.emberBright;
+  return (
+    <div style={styles.hearts} title={phrase}>
+      {[1, 2, 3, 4, 5].map((i) => (
+        <span key={i} style={{ color: i <= level ? color : 'rgba(255,255,255,0.18)' }}>♥</span>
+      ))}
+    </div>
+  );
+}
 
 // Chat-app style conversation panel (Day 10 QoL): a self-contained framed box that
 // sits over the world. The two speakers face each other at the top - the NPC's
@@ -17,9 +51,14 @@ const MOOD_EMOJI = {
   wary: '🤨', annoyed: '😒', tired: '😪',
 };
 
-export default function DialogueBox({ dialogue, onSend, onClose, playerSpriteId, playerName }) {
+export default function DialogueBox({ dialogue, onSend, onClose, playerSpriteId, playerName, timesTalked = 0 }) {
   const [draft, setDraft] = useState('');
+  const [speaking, setSpeaking] = useState(false);
   const transcriptRef = useRef(null);
+
+  // Glow the NPC avatar while their voice clip plays.
+  useEffect(() => audioManager.onVoice(setSpeaking), []);
+  useEffect(() => setSpeaking(false), [dialogue?.npcId]);
 
   useEffect(() => {
     const el = transcriptRef.current;
@@ -77,12 +116,22 @@ export default function DialogueBox({ dialogue, onSend, onClose, playerSpriteId,
         {/* The two speakers, facing each other. */}
         <div style={styles.stage}>
           <div style={styles.speakerLeft}>
-            <SpritePortrait spriteId={dialogue.npcSpriteId} tintId={dialogue.npcId} name={dialogue.npcName} size={72} />
+            <SpritePortrait
+              spriteId={dialogue.npcSpriteId}
+              occupation={dialogue.occupation}
+              tintId={dialogue.npcId}
+              name={dialogue.npcName}
+              size={72}
+              glow={speaking}
+            />
             <div style={styles.speakerMeta}>
               <div style={styles.npcName}>{dialogue.npcName}</div>
               {dialogue.occupation ? <div style={styles.occupation}>{dialogue.occupation}</div> : null}
               <div style={styles.mood}>
                 {moodGlyph ? `${moodGlyph} ` : ''}{dialogue.mood}
+              </div>
+              <div style={styles.history}>
+                {timesTalked > 0 ? `Spoken ${timesTalked}×` : 'First meeting'}
               </div>
             </div>
           </div>
@@ -91,7 +140,12 @@ export default function DialogueBox({ dialogue, onSend, onClose, playerSpriteId,
             <div style={{ ...styles.speakerMeta, ...styles.speakerMetaRight }}>
               <div style={styles.youName}>{playerName || 'You'}</div>
               {dialogue.disposition ? (
-                <div style={styles.disposition}>{dialogue.disposition} toward you</div>
+                <>
+                  <div style={styles.dispRow}>
+                    <DispositionMeter phrase={dialogue.disposition} />
+                  </div>
+                  <div style={styles.disposition}>{dialogue.disposition}</div>
+                </>
               ) : null}
             </div>
             <SpritePortrait spriteId={playerSpriteId} name={playerName || 'You'} size={72} />
@@ -132,6 +186,21 @@ export default function DialogueBox({ dialogue, onSend, onClose, playerSpriteId,
               </div>
             </div>
           ) : null}
+        </div>
+
+        <div style={styles.chips}>
+          {OPENERS.map((text) => (
+            <button
+              key={text}
+              type="button"
+              className="cv-btn"
+              style={styles.chip}
+              disabled={dialogue.busy}
+              onClick={() => !dialogue.busy && onSend(text)}
+            >
+              {text}
+            </button>
+          ))}
         </div>
 
         <form style={styles.inputRow} onSubmit={submit}>
@@ -250,6 +319,33 @@ const styles = {
     color: COLORS.creamDim,
     fontStyle: 'italic',
     marginTop: '2px',
+  },
+  history: {
+    fontSize: '11px',
+    color: COLORS.muted,
+    marginTop: '2px',
+  },
+  dispRow: {
+    display: 'flex',
+    justifyContent: 'flex-end',
+    marginTop: '2px',
+  },
+  hearts: {
+    display: 'inline-flex',
+    gap: '1px',
+    fontSize: '13px',
+    lineHeight: 1,
+    letterSpacing: '1px',
+  },
+  chips: {
+    display: 'flex',
+    flexWrap: 'wrap',
+    gap: '6px',
+    marginBottom: '8px',
+  },
+  chip: {
+    fontSize: '11px',
+    padding: '4px 9px',
   },
   remembered: {
     margin: '10px 0 0',

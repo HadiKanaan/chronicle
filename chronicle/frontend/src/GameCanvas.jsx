@@ -14,7 +14,7 @@ import {
   PROP_ATLAS,
   CHARACTER_ATLAS,
   CHARACTER_FALLBACK,
-  CHARACTER_TINTS,
+  characterTint,
   DAY_NIGHT_TINT,
   allImageSources,
 } from './sprites';
@@ -76,12 +76,15 @@ const characterId = (c) => c.id ?? c.npc_id;
 
 const WALK_FRAME_MS = 110; // ~9fps walk cycle
 
-// Cache of tinted character sheets, keyed by `${src}|${tintIndex}`, built once
-// per (sheet, tint). Tinting a full sheet keeps per-frame slicing identical.
+// Cache of recolored character sheets, keyed by `${src}|${tint}`, built once per
+// (sheet, tint). Recolor = a MULTIPLY pass (preserves the sprite's shading) then a
+// destination-in mask with the original sheet (so only the sprite's own pixels are
+// coloured, never the transparent padding). Strong enough to read as a different
+// person, while frame slicing stays identical.
 const _tintCache = new Map();
-function tintedSheet(image, src, tintIndex) {
-  if (!CHARACTER_TINTS[tintIndex]) return image; // index 0 / none -> natural
-  const key = `${src}|${tintIndex}`;
+function tintedSheet(image, src, tint) {
+  if (!tint) return image; // natural
+  const key = `${src}|${tint}`;
   let canvas = _tintCache.get(key);
   if (canvas) return canvas;
   canvas = document.createElement('canvas');
@@ -90,19 +93,14 @@ function tintedSheet(image, src, tintIndex) {
   const cx = canvas.getContext('2d');
   cx.imageSmoothingEnabled = false;
   cx.drawImage(image, 0, 0);
-  cx.globalCompositeOperation = 'source-atop'; // tint only the opaque pixels
-  cx.fillStyle = CHARACTER_TINTS[tintIndex];
+  cx.globalCompositeOperation = 'multiply';
+  cx.fillStyle = tint;
   cx.fillRect(0, 0, canvas.width, canvas.height);
+  cx.globalCompositeOperation = 'destination-in'; // keep only the sprite's pixels
+  cx.drawImage(image, 0, 0);
+  cx.globalCompositeOperation = 'source-over';
   _tintCache.set(key, canvas);
   return canvas;
-}
-
-// Stable per-id tint choice (0 = no tint) so a villager always looks the same.
-function tintIndexFor(id) {
-  if (id == null) return 0;
-  let h = 0;
-  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) & 0x7fffffff;
-  return h % CHARACTER_TINTS.length;
 }
 
 // A character is "moving" while its glide is still running toward a new tile.
@@ -133,6 +131,10 @@ function makeStreaks(count) {
   return streaks;
 }
 const RAIN_STREAKS = makeStreaks(220);
+
+// NPCs within this many tiles of the player show a floating name label, so you
+// know who's around before talking (pairs with the E-to-talk shortcut).
+const NAME_LABEL_RANGE = 3.6;
 
 // Decoration on-screen size, in tiles tall, with width derived from each
 // (trimmed) sprite's own aspect so nothing is squashed. Trees stand well above
@@ -570,9 +572,16 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     worldItems.push({ sortY: building.y + bh + 0.5, kind: 'building', building, alpha });
   }
   worldItems.sort((a, b) => a.sortY - b.sortY);
+  const nameLabels = [];
   for (const item of worldItems) {
     if (item.kind === 'npc') {
       drawCharacter(ctx, images, item.npc, item.drawX, item.drawY, camX, camY, now, item.moving);
+      // Collect a name label for NPCs near the player (drawn on top afterwards).
+      const dx = item.drawX - focus.x;
+      const dy = item.drawY - focus.y;
+      if (dx * dx + dy * dy <= NAME_LABEL_RANGE * NAME_LABEL_RANGE && item.npc.name) {
+        nameLabels.push({ name: item.npc.name, x: item.drawX, y: item.drawY });
+      }
     } else {
       drawBuilding(ctx, images, item.building, camX, camY, item.alpha);
       drawDoor(ctx, images, item.building, camX, camY, item.alpha);
@@ -586,6 +595,12 @@ function drawScene(ctx, images, gameState, positions, tileMap, fogMap, dims, now
     const drawX = pos ? pos.x : gameState.player.x;
     const drawY = pos ? pos.y : gameState.player.y;
     drawCharacter(ctx, images, { ...gameState.player, isPlayer: true }, drawX, drawY, camX, camY, now, isMoving(pos, now));
+  }
+
+  // Proximity name labels, drawn on top of the world layer so a building roof
+  // never hides who is standing next to you.
+  for (const label of nameLabels) {
+    drawNameLabel(ctx, label.name, label.x, label.y, camX, camY);
   }
 
   // Fog overlays painted on top: explored tiles get a dim wash, unexplored go
@@ -699,6 +714,31 @@ function drawProp(ctx, images, prop, camX, camY) {
   ctx.drawImage(image, Math.round(centerX - drawW / 2), Math.round(feetY - drawH), drawW, drawH);
 }
 
+// A small floating name plate above a nearby NPC (parchment-cream on a dark
+// backing with a thin gold edge), so the crowd is legible at a glance.
+function drawNameLabel(ctx, name, worldX, worldY, camX, camY) {
+  const centerX = Math.round((worldX + 0.5) * DISPLAY_TILE - camX);
+  // The character sprite stands ~1.5 tiles tall from the tile base; sit the
+  // label just above its head.
+  const baseY = Math.round((worldY + 1) * DISPLAY_TILE - camY);
+  ctx.font = '10px ui-monospace, "Courier New", monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const textW = ctx.measureText(name).width;
+  const padX = 5;
+  const boxW = Math.ceil(textW + padX * 2);
+  const boxH = 14;
+  const x = centerX - boxW / 2;
+  const y = baseY - Math.round(DISPLAY_TILE * 1.5) - boxH;
+  ctx.fillStyle = 'rgba(11, 14, 18, 0.74)';
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.strokeStyle = 'rgba(201, 162, 75, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
+  ctx.fillStyle = '#ece3cf';
+  ctx.fillText(name, centerX, y + boxH / 2 + 0.5);
+}
+
 function drawCharacter(ctx, images, character, worldX, worldY, camX, camY, now, moving) {
   const entry = CHARACTER_ATLAS[character.sprite_id] ?? CHARACTER_FALLBACK;
   // Tile center on screen, and the bottom of the tile (where feet rest).
@@ -727,10 +767,13 @@ function drawCharacter(ctx, images, character, worldX, worldY, camX, camY, now, 
   }
 
   // Cycle the walk/run frames while moving; idle on frame 0. NPCs get a stable
-  // clothing tint; the player stays untinted (recognisable, plus the ring).
+  // occupation-flavored recolor; the player stays untinted (recognisable, plus
+  // the ring).
   const frames = entry.frames ?? 1;
   const frame = moving && frames > 1 ? Math.floor(now / WALK_FRAME_MS) % frames : 0;
-  const sheet = character.isPlayer ? image : tintedSheet(image, entry.src, tintIndexFor(character.id));
+  const sheet = character.isPlayer
+    ? image
+    : tintedSheet(image, entry.src, characterTint(character.occupation, character.id));
 
   const drawW = entry.fw * entry.scale;
   const drawH = entry.fh * entry.scale;

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { COLORS, FONTS, plate, plateHeading } from './theme';
 
 // Day 10 village minimap (Part E). A tiny pixel-crisp canvas that downscales the
@@ -30,10 +30,18 @@ function cameraOrigin(focusPx, worldPx, viewPx) {
   return Math.max(0, Math.min(focusPx - viewPx / 2, worldPx - viewPx));
 }
 
+// Prettify a building_type slug for the hover label ("magistrate_hall" → "Magistrate Hall").
+function prettyType(type) {
+  return (type || '').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export default function Minimap({ gameState }) {
   const canvasRef = useRef(null);
   const stateRef = useRef(gameState);
   stateRef.current = gameState;
+  // Live cell size / grid extent, written each draw, read by the hover handler.
+  const dimsRef = useRef({ cell: 1, cols: 0, rows: 0 });
+  const [hover, setHover] = useState(null); // { label, x, y } in client coords
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -64,6 +72,7 @@ export default function Minimap({ gameState }) {
       const h = rows * cell;
       if (canvas.width !== w) canvas.width = w;
       if (canvas.height !== h) canvas.height = h;
+      dimsRef.current = { cell, cols, rows };
       ctx.imageSmoothingEnabled = false;
 
       // Fog lookup: tiles in fog_map are 'explored' (dim) or 'unexplored'
@@ -150,12 +159,47 @@ export default function Minimap({ gameState }) {
     };
   }, []);
 
+  // Map the cursor to a tile cell and find the building under it (if any) so the
+  // village landmarks are identifiable from the minimap.
+  const handleMove = (event) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const { cell } = dimsRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cx = Math.floor(((event.clientX - rect.left) * scaleX) / cell);
+    const cy = Math.floor(((event.clientY - rect.top) * scaleY) / cell);
+    const fog = new Map();
+    for (const f of stateRef.current.fog_map ?? []) fog.set(`${f.x},${f.y}`, f.fog_tier);
+    const found = (stateRef.current.buildings ?? []).find((b) => {
+      const bw = b.width ?? 1;
+      const bh = b.height ?? 1;
+      return cx >= b.x && cx < b.x + bw && cy >= b.y && cy < b.y + bh
+        && fog.get(`${b.x},${b.y}`) !== 'unexplored'; // don't reveal hidden ones
+    });
+    if (found) setHover({ label: prettyType(found.building_type), x: event.clientX, y: event.clientY });
+    else setHover(null);
+  };
+
   return (
     <section className="cv-plate cv-slide-up" style={{ ...plate, ...styles.panel }}>
       <h2 style={{ ...plateHeading, ...styles.heading }}>Aldenmoor</h2>
       <div style={styles.canvasWrap}>
-        <canvas ref={canvasRef} className="cv-pixel" style={styles.canvas} aria-label="Village minimap" />
+        <canvas
+          ref={canvasRef}
+          className="cv-pixel"
+          style={styles.canvas}
+          aria-label="Village minimap"
+          onMouseMove={handleMove}
+          onMouseLeave={() => setHover(null)}
+        />
       </div>
+      {hover ? (
+        <div className="cv-plate" style={{ ...plate, ...styles.tooltip, left: hover.x + 12, top: hover.y - 28 }}>
+          {hover.label}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -181,5 +225,15 @@ const styles = {
     border: `1px solid ${COLORS.frameDark}`,
     background: '#070a0e',
     fontFamily: FONTS.body,
+  },
+  tooltip: {
+    position: 'fixed',
+    padding: '4px 9px',
+    fontSize: '11px',
+    fontFamily: FONTS.body,
+    color: COLORS.cream,
+    pointerEvents: 'none',
+    whiteSpace: 'nowrap',
+    zIndex: 30,
   },
 };

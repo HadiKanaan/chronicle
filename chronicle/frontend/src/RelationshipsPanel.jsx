@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import SpritePortrait from './SpritePortrait';
 import { COLORS, FONTS, plate, plateHeading } from './theme';
 
@@ -8,8 +9,28 @@ import { COLORS, FONTS, plate, plateHeading } from './theme';
 // sprite as a small tinted portrait, name, occupation, mood, disposition toward
 // the player, and how many times you've spoken.
 
+// How long a freshly-added acquaintance shows the "new" pulse.
+const NEW_MS = 5000;
+
 export default function RelationshipsPanel({ contacts }) {
   const list = contacts ?? [];
+
+  // Track when each acquaintance first appeared so a genuinely new one pulses
+  // briefly. Contacts present on the first render are seeded as pre-existing
+  // (never pulse); only ids added afterwards are "new". The 200ms poll re-renders
+  // the panel, so the badge naturally clears after NEW_MS.
+  const firstSeenRef = useRef(new Map());
+  const initRef = useRef(false);
+  const now = typeof performance !== 'undefined' ? performance.now() : 0;
+  const seen = firstSeenRef.current;
+  if (!initRef.current) {
+    for (const c of list) seen.set(c.npc_id, 0);
+    initRef.current = true;
+  }
+  for (const c of list) {
+    if (!seen.has(c.npc_id)) seen.set(c.npc_id, now);
+  }
+
   return (
     <section className="cv-plate cv-slide-right" style={{ ...plate, ...styles.panel }}>
       <h2 style={plateHeading}>Acquaintances</h2>
@@ -17,23 +38,26 @@ export default function RelationshipsPanel({ contacts }) {
         <div style={styles.empty}>No one yet. Walk up and speak to a villager.</div>
       ) : (
         <div style={styles.rows}>
-          {list.map((c) => (
-            <div key={c.npc_id} style={styles.row}>
-              <SpritePortrait spriteId={c.sprite_id} tintId={c.npc_id} name={c.name} />
-              <div style={styles.meta}>
-                <div style={styles.nameRow}>
-                  <span style={styles.name}>{c.name}</span>
-                  <span style={styles.count}>×{c.times_talked}</span>
-                </div>
-                {c.occupation ? <div style={styles.occupation}>{c.occupation}</div> : null}
-                <div style={styles.disposition}>
-                  <span style={styles.mood}>{c.mood}</span>
-                  <span style={styles.sep}> · </span>
-                  {c.disposition}
+          {list.map((c) => {
+            const isNew = now - (seen.get(c.npc_id) ?? 0) < NEW_MS;
+            return (
+              <div key={c.npc_id} style={styles.row} className={isNew ? 'cv-toast-in' : undefined}>
+                <SpritePortrait spriteId={c.sprite_id} occupation={c.occupation} tintId={c.npc_id} name={c.name} />
+                <div style={styles.meta}>
+                  <div style={styles.nameRow}>
+                    <span style={styles.name}>{c.name}</span>
+                    {isNew ? <span style={styles.newBadge}>✦ new</span> : <span style={styles.count}>×{c.times_talked}</span>}
+                  </div>
+                  {c.occupation ? <div style={styles.occupation}>{c.occupation}</div> : null}
+                  <div style={styles.disposition}>
+                    <span style={styles.mood}>{c.mood}</span>
+                    <span style={styles.sep}> · </span>
+                    {c.disposition}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </section>
@@ -63,37 +87,6 @@ const styles = {
     alignItems: 'center',
     gap: '10px',
   },
-  portrait: {
-    position: 'relative',
-    flex: '0 0 auto',
-    borderRadius: '3px',
-    overflow: 'hidden',
-    background: 'linear-gradient(180deg, #2a2415 0%, #1a1c12 100%)',
-    border: `1px solid ${COLORS.frameDark}`,
-    boxShadow: `inset 0 0 0 1px ${COLORS.frameGold}`,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  portraitInitial: {
-    position: 'absolute',
-    fontFamily: FONTS.display,
-    fontSize: '14px',
-    color: COLORS.gold,
-    opacity: 0.7,
-  },
-  portraitCanvas: {
-    position: 'relative',
-    width: '100%',
-    height: '100%',
-  },
-  portraitTint: {
-    position: 'absolute',
-    inset: 0,
-    mixBlendMode: 'multiply',
-    opacity: 0.5,
-    pointerEvents: 'none',
-  },
   meta: {
     minWidth: 0,
     flex: 1,
@@ -117,6 +110,17 @@ const styles = {
     fontSize: '11px',
     color: COLORS.gold,
     fontVariantNumeric: 'tabular-nums',
+  },
+  newBadge: {
+    flex: '0 0 auto',
+    fontSize: '10px',
+    color: COLORS.goldBright,
+    fontFamily: FONTS.display,
+    background: 'rgba(201,162,75,0.18)',
+    border: `1px solid ${COLORS.gold}`,
+    borderRadius: '3px',
+    padding: '1px 5px',
+    animation: 'cvFadeIn 0.7s ease-in-out infinite alternate',
   },
   occupation: {
     fontSize: '11px',
