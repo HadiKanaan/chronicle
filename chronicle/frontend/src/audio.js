@@ -26,9 +26,22 @@ const PEACEFUL = ['small-town-feeling', 'emonds-field', 'elven-town', 'eldemmors
 const OMINOUS = ['old-nights', 'tuathaan'];
 
 // Low default channel volumes — the OST sits under the simulation, never over it.
-// Music is kept gentle by default (it resets to this on every reload, so an
-// over-loud default is jarring); raise it from the Sound settings if you want.
+// Music is kept gentle by default; persisted choices (below) override it.
 const DEFAULT_VOLUMES = { music: 0.12, ambient: 0.5, voice: 1.0, sfx: 0.5 };
+
+// Sound settings persist across reloads so the player sets volume/mute once and
+// it sticks (the channel volumes used to reset to defaults every reload).
+const AUDIO_SETTINGS_KEY = 'cv-audio-settings';
+
+function _loadAudioSettings() {
+  try {
+    if (typeof localStorage === 'undefined') return {};
+    const raw = localStorage.getItem(AUDIO_SETTINGS_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (error) {
+    return {}; // storage blocked (private mode etc.) - fall back to defaults
+  }
+}
 
 const MUSIC_FADE_MS = 2200;
 const AMBIENT_FADE_MS = 1500;
@@ -77,11 +90,14 @@ function desiredAmbientLayers(weather, timeOfDay) {
 export class AudioManager {
   constructor() {
     this.unlocked = false;
-    this.masterMuted = false;
+    // Restore persisted sound settings (mute / master volume / channel volumes),
+    // falling back to defaults for anything absent.
+    const saved = _loadAudioSettings();
+    this.masterMuted = saved.masterMuted ?? false;
     // Master gain across every channel (Howler global volume), independent of
     // the per-channel music/ambient/voice volumes that multiply under it.
-    this.masterVolume = 1.0;
-    this.volumes = { ...DEFAULT_VOLUMES };
+    this.masterVolume = typeof saved.masterVolume === 'number' ? saved.masterVolume : 1.0;
+    this.volumes = { ...DEFAULT_VOLUMES, ...(saved.volumes ?? {}) };
 
     // Music state.
     this.musicHowl = null;
@@ -184,9 +200,23 @@ export class AudioManager {
   }
 
   // --- channel controls ---------------------------------------------------
+  _saveSettings() {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      localStorage.setItem(AUDIO_SETTINGS_KEY, JSON.stringify({
+        masterMuted: this.masterMuted,
+        masterVolume: this.masterVolume,
+        volumes: this.volumes,
+      }));
+    } catch (error) {
+      // storage unavailable; settings just won't persist this session
+    }
+  }
+
   setMasterMute(muted) {
     this.masterMuted = muted;
     Howler.mute(muted); // global; per-channel volumes are preserved underneath
+    this._saveSettings();
   }
 
   toggleMasterMute() {
@@ -201,6 +231,7 @@ export class AudioManager {
     const vol = Math.max(0, Math.min(1, value));
     this.masterVolume = vol;
     Howler.volume(vol);
+    this._saveSettings();
   }
 
   getMasterVolume() {
@@ -217,6 +248,7 @@ export class AudioManager {
     }
     if (channel === 'voice' && this.voiceHowl) this.voiceHowl.volume(vol);
     if (channel === 'sfx' && this.footstepHowl) this.footstepHowl.volume(vol);
+    this._saveSettings();
   }
 
   getVolume(channel) {
