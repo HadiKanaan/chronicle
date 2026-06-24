@@ -26,7 +26,9 @@ const PEACEFUL = ['small-town-feeling', 'emonds-field', 'elven-town', 'eldemmors
 const OMINOUS = ['old-nights', 'tuathaan'];
 
 // Low default channel volumes — the OST sits under the simulation, never over it.
-const DEFAULT_VOLUMES = { music: 0.25, ambient: 0.5, voice: 1.0, sfx: 0.5 };
+// Music is kept gentle by default (it resets to this on every reload, so an
+// over-loud default is jarring); raise it from the Sound settings if you want.
+const DEFAULT_VOLUMES = { music: 0.12, ambient: 0.5, voice: 1.0, sfx: 0.5 };
 
 const MUSIC_FADE_MS = 2200;
 const AMBIENT_FADE_MS = 1500;
